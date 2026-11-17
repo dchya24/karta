@@ -43,6 +43,10 @@ type state struct {
 
 	// pesan yang body-nya sedang diambil lazy (ID → berlangsung)
 	fetching map[int]bool
+
+	// composer
+	composerOpen bool
+	composerMode string // new | reply | forward
 }
 
 // Run membuka window utama, memulai worker sinkronisasi, dan menjalankan
@@ -172,6 +176,13 @@ func (s *state) fetchBodyLazy(id int) {
 func (s *state) view(c *ui.Context) {
 	t := c.Theme()
 	s.shortcuts(c)
+
+	if s.composerOpen {
+		ui.Column(c).Fill().Padding(24, 32).Gap(10).Children(func() {
+			s.composerForm(c)
+		})
+		return
+	}
 
 	ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {
 		// Pane 1: sidebar akun + folder + unread.
@@ -343,9 +354,18 @@ func (s *state) shortcuts(c *ui.Context) {
 			s.selected--
 		}
 	}
-	c.OnShortcut(ui.Cmd, ui.KeyN, func() {
-		// TODO(v0.1): buka composer baru.
-	})
+	if s.composerOpen {
+		return
+	}
+	if c.Shortcut(0, ui.KeyC) {
+		s.openComposer("new")
+	}
+	if c.Shortcut(0, ui.KeyR) && s.selected < len(s.msgs) {
+		s.openComposer("reply")
+	}
+	if c.Shortcut(0, ui.KeyF) && s.selected < len(s.msgs) {
+		s.openComposer("forward")
+	}
 }
 
 // shortDate memangkas timestamp ISO menjadi jam:menit singkat.
