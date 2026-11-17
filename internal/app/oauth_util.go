@@ -51,6 +51,21 @@ func openInSystemBrowser(url string) error {
 	}
 }
 
+// oauthPort adalah port tetap callback loopback (RFC 8252): sama tiap
+// login, agar tab browser lama tetap valid.
+const oauthPort = 8699
+
+// fixedOrFreePort mengembalikan port tetap bila bisa di-bind; kalau sibuk,
+// jatuh ke port acak dari OS.
+func fixedOrFreePort(preferred int) (int, error) {
+	l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", preferred))
+	if err == nil {
+		l.Close()
+		return preferred, nil
+	}
+	return freePort()
+}
+
 // dialIMAP membuka koneksi IMAP akun sesuai metode autentikasinya:
 // password (keyring) atau OAuth2 (token keyring + refresh otomatis).
 func (s *Service) dialIMAP(ctx context.Context, acc store.Account) (IMAPClient, error) {

@@ -213,7 +213,7 @@ func (s *Service) StartOAuthLogin(ctx context.Context, onDone func(email string,
 	}
 	state := randomToken(16)
 	verifier := randomToken(48)
-	port, err := freePort()
+	port, err := fixedOrFreePort(oauthPort)
 	if err != nil {
 		return err
 	}
