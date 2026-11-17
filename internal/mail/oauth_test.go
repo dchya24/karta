@@ -1,7 +1,6 @@
 package mail
 
 import (
-	"encoding/base64"
 	"strings"
 	"testing"
 )
@@ -23,12 +22,8 @@ func TestXOAUTH2ClientStart(t *testing.T) {
 	if mech != "XOAUTH2" {
 		t.Fatalf("mech %q", mech)
 	}
-	dec, err := base64.StdEncoding.DecodeString(string(ir))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(dec), "auth=Bearer tok") {
-		t.Fatalf("ir %q", string(dec))
+	if !strings.Contains(string(ir), "auth=Bearer tok") {
+		t.Fatalf("ir %q", string(ir))
 	}
 	if resp, err := c.Next([]byte("challenge")); err != nil || len(resp) != 0 {
 		t.Fatalf("Next=%q err=%v", resp, err)
