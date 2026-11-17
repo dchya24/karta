@@ -1,7 +1,6 @@
 package mail
 
 import (
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/smtp"
@@ -18,10 +17,10 @@ const (
 )
 
 // xoauth2Response membangun initial response XOAUTH2 per RFC 7628:
-// "user=<user>\x01auth=Bearer <token>\x01\x01", di-base64.
+// "user=<user>\x01auth=Bearer <token>\x01\x01". Raw bytes — library yang
+// mengirim (go-imap, net/smtp) yang meng-base64 sendiri.
 func xoauth2Response(user, token string) []byte {
-	raw := fmt.Sprintf("user=%s\x01auth=Bearer %s\x01\x01", user, token)
-	return []byte(base64.StdEncoding.EncodeToString([]byte(raw)))
+	return []byte(fmt.Sprintf("user=%s\x01auth=Bearer %s\x01\x01", user, token))
 }
 
 // XOAUTH2Client mengimplementasikan sasl.Client untuk AUTHENTICATE XOAUTH2.

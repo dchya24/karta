@@ -8,7 +8,7 @@ import (
 
 func TestXoauth2Response(t *testing.T) {
 	got := string(xoauth2Response("a@gmail.com", "tok123"))
-	want := base64.StdEncoding.EncodeToString([]byte("user=a@gmail.com\x01auth=Bearer tok123\x01\x01"))
+	want := "user=a@gmail.com\x01auth=Bearer tok123\x01\x01"
 	if got != want {
 		t.Fatalf("resp %q mau %q", got, want)
 	}
