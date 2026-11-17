@@ -1,0 +1,357 @@
+// Package ui membangun antarmuka native mygo/ui Karta: layout 3-pane
+// (sidebar, daftar pesan, reading pane) plus form tambah akun.
+// Semua kode di sini berjalan di main thread; pekerjaan jaringan lewat
+// goroutine yang melaporkan hasil via mygo Window.Update.
+package ui
+
+import (
+	"context"
+	"log"
+	"strconv"
+	"time"
+
+	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/ui"
+
+	"karta/internal/app"
+	"karta/internal/sync"
+)
+
+// state adalah kondisi UI: dibaca dan diubah hanya di main thread (view dan
+// callback window), diperbarui dari goroutine lewat Window.Update.
+type state struct {
+	svc      *app.Service
+	win      *mygo.Window
+	folders  []app.Folder
+	account  int    // akun terpilih (0 = pertama)
+	folder   int    // folder terpilih (ID)
+	folderSel string // pilihan sidebar (indeks folder sebagai string)
+	query    string
+	list     ui.ListState
+	msgs     []app.MessageHeader
+	selected int
+
+	// form tambah akun
+	showAccount bool
+	fEmail      string
+	fPass       string
+	fIMAPHost   string
+	fIMAPPort   string
+	fSMTPHost   string
+	fSMTPPort   string
+	fIMAPTLS    bool
+
+	// pesan yang body-nya sedang diambil lazy (ID → berlangsung)
+	fetching map[int]bool
+}
+
+// Run membuka window utama, memulai worker sinkronisasi, dan menjalankan
+// loop aplikasi sampai keluar.
+func Run(svc *app.Service) error {
+	st := &state{svc: svc, fetching: map[int]bool{}}
+	syncCtx, cancelSync := context.WithCancel(context.Background())
+	defer cancelSync()
+	mygo.App.WhenReady(func() {
+		st.win = mygo.NewWindow(mygo.WindowOptions{
+			Title:    "Karta",
+			Width:    1100, Height: 720,
+			MinWidth: 760, MinHeight: 480,
+			StateKey: "karta",
+			Content:  ui.View(st.view),
+		})
+		st.reloadFolders()
+		st.startSync(syncCtx)
+	})
+	return mygo.App.Run()
+}
+
+// startSync menjalankan worker polling di goroutine; setiap siklus memicu
+// repaint lewat Window.Update (main thread), tidak pernah sentuh widget langsung.
+func (s *state) startSync(ctx context.Context) {
+	win := s.win
+	go sync.NewWorker(s.svc, 5*time.Minute, func() {
+		win.Update(func() { s.reloadFolders() })
+	}).Run(ctx)
+}
+
+// refreshNow menjalankan sinkronisasi segera di goroutine.
+func (s *state) refreshNow() {
+	win := s.win
+	go func() {
+		if err := s.svc.Refresh(context.Background()); err != nil {
+			log.Printf("ui: refresh: %v", err)
+		}
+		win.Update(func() { s.reloadFolders() })
+	}()
+}
+
+// reloadFolders memuat folder akun dan pesan folder terpilih. Main thread saja.
+func (s *state) reloadFolders() {
+	accs, err := s.svc.ListAccounts()
+	if err != nil {
+		log.Printf("ui: akun: %v", err)
+		return
+	}
+	s.folders = nil
+	if len(accs) > 0 {
+		if s.account == 0 || s.account > accs[len(accs)-1].ID {
+			s.account = accs[0].ID
+		}
+		fs, err := s.svc.ListFolders(s.account)
+		if err != nil {
+			log.Printf("ui: folder: %v", err)
+		} else {
+			s.folders = fs
+		}
+	}
+	if len(s.folders) > 0 {
+		s.folder = s.folders[0].ID
+		s.folderSel = "0"
+	} else {
+		s.folder, s.folderSel = 0, ""
+	}
+	s.reloadMessages()
+}
+
+// reloadMessages memuat daftar pesan folder terpilih + filter query.
+func (s *state) reloadMessages() {
+	msgs, err := s.svc.ListMessages(s.folder, s.query)
+	if err != nil {
+		log.Printf("ui: pesan: %v", err)
+		return
+	}
+	s.msgs = msgs
+	if s.selected >= len(s.msgs) {
+		s.selected = max(0, len(s.msgs)-1)
+	}
+}
+
+// saveAccount membaca form, menyimpan akun, memicu sinkronisasi pertama.
+func (s *state) saveAccount() {
+	imapPort, err := strconv.Atoi(s.fIMAPPort)
+	if err != nil || imapPort <= 0 {
+		imapPort = 993
+	}
+	smtpPort, err := strconv.Atoi(s.fSMTPPort)
+	if err != nil || smtpPort <= 0 {
+		smtpPort = 465
+	}
+	id, err := s.svc.AddAccount(context.Background(), app.AccountConfig{
+		Email: s.fEmail, Password: s.fPass,
+		IMAPHost: s.fIMAPHost, IMAPPort: imapPort, IMAPTLS: s.fIMAPTLS,
+		SMTPHost: s.fSMTPHost, SMTPPort: smtpPort, SMTPTLS: true,
+	})
+	if err != nil {
+		log.Printf("ui: tambah akun: %v", err)
+		return
+	}
+	s.account = id
+	s.showAccount = false
+	s.reloadFolders()
+	s.refreshNow() // sinkron pertama langsung
+}
+
+// fetchBodyLazy mengambil isi pesan di goroutine bila belum ter-cache.
+func (s *state) fetchBodyLazy(id int) {
+	if s.fetching[id] {
+		return
+	}
+	s.fetching[id] = true
+	win := s.win
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		if _, err := s.svc.GetMessage(ctx, id); err != nil {
+			log.Printf("ui: fetch body pesan %d: %v", id, err)
+		}
+		win.Update(func() { delete(s.fetching, id) })
+	}()
+}
+
+// view adalah builder UI native; berjalan tiap frame di main thread.
+func (s *state) view(c *ui.Context) {
+	t := c.Theme()
+	s.shortcuts(c)
+
+	ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {
+		// Pane 1: sidebar akun + folder + unread.
+		ui.Column(c).Width(220).Shrink(0).PaddingY(12).Gap(6).Background(t.Surface).Children(func() {
+			ui.Row(c).Padding(0, 16).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "Karta").Bold().Grow(1)
+				if ui.Button(c, "+").Label("Tambah akun").Clicked() {
+					s.showAccount = !s.showAccount
+				}
+			})
+			if len(s.folders) > 0 {
+				if ui.Sidebar(c, &s.folderSel, func() {
+					for i, f := range s.folders {
+						label := f.Name
+						if f.Unread > 0 {
+							label += " (" + strconv.Itoa(f.Unread) + ")"
+						}
+						ui.SidebarItem(c, strconv.Itoa(i), nil, label)
+					}
+				}).Grow(1).Label("Folder").Changed() {
+					if idx, err := strconv.Atoi(s.folderSel); err == nil && idx >= 0 && idx < len(s.folders) {
+						s.folder = s.folders[idx].ID
+						s.reloadMessages()
+					}
+				}
+			} else {
+				ui.Text(c, "Belum ada akun.\nTekan + untuk menambah.").TextColor(t.TextMuted).Padding(16)
+			}
+			if ui.Button(c, "Sinkronkan").Label("Sinkronkan sekarang").Clicked() {
+				s.refreshNow()
+			}
+		})
+
+		// Pane 2+3: daftar pesan | reading pane; atau form akun.
+		if s.showAccount {
+			ui.Column(c).Grow(1).MinWidth(0).Padding(24, 32).Gap(10).Children(func() {
+				s.accountForm(c)
+			})
+			return
+		}
+		var splitSize float32 = 380
+		ui.Split(c, &splitSize, func() {
+			ui.Column(c).Fill().Gap(0).Children(func() {
+				ui.Row(c).Padding(8, 10).Children(func() {
+					if ui.TextInputBase(c, &s.query).Grow(1).
+						Placeholder("Cari (FTS5 lokal)").Label("Cari").Changed() {
+						s.reloadMessages()
+					}
+				})
+				s.list.Selected = &s.selected
+				ui.List(c, &s.list, len(s.msgs), func(i int) { s.row(c, i) }).
+					Grow(1).Children(func() {
+					if len(s.msgs) == 0 {
+						ui.Text(c, "Tidak ada pesan").TextColor(t.TextMuted).Padding(16)
+					}
+				})
+			})
+		}, func() {
+			ui.Column(c).Grow(1).MinWidth(0).Padding(16, 20).Gap(8).Children(func() {
+				s.readingPane(c)
+			})
+		}).Grow(1)
+	})
+}
+
+// accountForm menggambar form tambah akun.
+func (s *state) accountForm(c *ui.Context) {
+	ui.Text(c, "Tambah Akun").Bold().FontSize(18)
+	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "Email").Width(120)
+		ui.TextInputBase(c, &s.fEmail).Grow(1).Placeholder("nama@contoh.id").Label("Email")
+	})
+	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "Password").Width(120)
+		ui.TextInputBase(c, &s.fPass).Grow(1).Password().Placeholder("App password").Label("Password")
+	})
+	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "IMAP host").Width(120)
+		ui.TextInputBase(c, &s.fIMAPHost).Grow(1).Placeholder("imap.contoh.id").Label("IMAP host")
+		ui.TextInputBase(c, &s.fIMAPPort).Width(80).Placeholder("993").Label("IMAP port")
+	})
+	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "SMTP host").Width(120)
+		ui.TextInputBase(c, &s.fSMTPHost).Grow(1).Placeholder("smtp.contoh.id").Label("SMTP host")
+		ui.TextInputBase(c, &s.fSMTPPort).Width(80).Placeholder("465").Label("SMTP port")
+	})
+	ui.Checkbox(c, &s.fIMAPTLS, "Gunakan TLS untuk IMAP")
+	ui.Row(c).Gap(12).Children(func() {
+		if ui.Button(c, "Simpan").Clicked() {
+			s.saveAccount()
+		}
+		if ui.Button(c, "Batal").Clicked() {
+			s.showAccount = false
+		}
+	})
+}
+
+// row menggambar satu baris daftar pesan.
+func (s *state) row(c *ui.Context, i int) {
+	m := s.msgs[i]
+	t := c.Theme()
+	sender, subject := m.Sender, m.Subject
+	if sender == "" {
+		sender = m.SenderAddr
+	}
+	weight := 400
+	if m.Unread {
+		weight = 700
+	}
+	suffix := ""
+	if m.HasAttachment {
+		suffix = " 📎"
+	}
+	ui.Row(c).Padding(8, 10).Gap(8).Children(func() {
+		ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+			ui.Textf(c, "%s%s", sender, suffix).FontWeight(weight).Grow(0)
+			ui.Textf(c, "%s", subject).TextColor(t.TextMuted).FontSize(12)
+		})
+		if m.Date != "" {
+			ui.Textf(c, "%s", shortDate(m.Date)).TextColor(t.TextMuted).FontSize(11)
+		}
+	})
+}
+
+// readingPane menampilkan pesan terpilih sebagai teks bersih. Body yang
+// belum ter-cache diambil di goroutine (tidak pernah di main thread).
+func (s *state) readingPane(c *ui.Context) {
+	t := c.Theme()
+	if s.selected >= len(s.msgs) {
+		ui.Text(c, "Pilih pesan untuk dibaca").TextColor(t.TextMuted)
+		return
+	}
+	id := s.msgs[s.selected].ID
+	m, err := s.svc.PeekMessage(id)
+	if err != nil {
+		ui.Textf(c, "gagal memuat pesan: %v", err).TextColor(t.TextMuted)
+		return
+	}
+	if !m.Fetched {
+		ui.Text(c, "Mengambil isi dari server…").TextColor(t.TextMuted)
+		s.fetchBodyLazy(id)
+		return
+	}
+	ui.Textf(c, "%s", m.Subject).Bold().FontSize(18)
+	ui.Textf(c, "%s  →  %s", m.Sender, m.To).TextColor(t.TextMuted).FontSize(12)
+	ui.Divider(c)
+	if m.PlainText == "" {
+		ui.Text(c, "(isi pesan kosong)").TextColor(t.TextMuted)
+	} else {
+		ui.Textf(c, "%s", m.PlainText)
+	}
+	if len(m.Attachments) > 0 {
+		ui.Divider(c)
+		for _, a := range m.Attachments {
+			ui.Textf(c, "📎 %s (%s)", a.Filename, a.ContentType).TextColor(t.TextMuted).FontSize(12)
+		}
+	}
+}
+
+// shortcuts memasang navigasi keyboard PRD §3.5.
+func (s *state) shortcuts(c *ui.Context) {
+	if c.Shortcut(0, ui.KeyDown) || c.Shortcut(0, ui.KeyJ) {
+		if s.selected < len(s.msgs)-1 {
+			s.selected++
+		}
+	}
+	if c.Shortcut(0, ui.KeyUp) || c.Shortcut(0, ui.KeyK) {
+		if s.selected > 0 {
+			s.selected--
+		}
+	}
+	c.OnShortcut(ui.Cmd, ui.KeyN, func() {
+		// TODO(v0.1): buka composer baru.
+	})
+}
+
+// shortDate memangkas timestamp ISO menjadi jam:menit singkat.
+func shortDate(iso string) string {
+	if len(iso) >= 16 {
+		return iso[11:16]
+	}
+	return iso
+}
