@@ -21,30 +21,35 @@ const oauthScope = "https://mail.google.com/"
 // oauthKeyringService memisahkan kredensial OAuth dari password.
 const oauthKeyringService = "karta-oauth"
 
-// oauthClientID membaca Client ID dari env KARTA_OAUTH_CLIENT_ID atau
-// file ~/.config/karta/oauth.json {"client_id": "..."}.
-func (s *Service) oauthClientID() (string, error) {
-	if id := os.Getenv("KARTA_OAUTH_CLIENT_ID"); id != "" {
-		return strings.TrimSpace(id), nil
+// oauthConfig membaca Client ID dan Client Secret dari env
+// (KARTA_OAUTH_CLIENT_ID, KARTA_OAUTH_CLIENT_SECRET) atau file
+// ~/.config/karta/oauth.json {"client_id": "...", "client_secret": "..."}.
+// Secret opsional: client Desktop lama tanpa secret tetap jalan.
+func (s *Service) oauthConfig() (id, secret string, err error) {
+	id = strings.TrimSpace(os.Getenv("KARTA_OAUTH_CLIENT_ID"))
+	secret = strings.TrimSpace(os.Getenv("KARTA_OAUTH_CLIENT_SECRET"))
+	if id != "" {
+		return id, secret, nil
 	}
 	dir, err := os.UserConfigDir()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "karta", "oauth.json"))
 	if err != nil {
-		return "", fmt.Errorf("client_id tidak ada (env KARTA_OAUTH_CLIENT_ID atau ~/config/karta/oauth.json): %w", err)
+		return "", "", fmt.Errorf("client_id tidak ada (env KARTA_OAUTH_CLIENT_ID atau ~/.config/karta/oauth.json): %w", err)
 	}
 	var cfg struct {
-		ClientID string `json:"client_id"`
+		ClientID     string `json:"client_id"`
+		ClientSecret string `json:"client_secret"`
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return "", fmt.Errorf("baca oauth.json: %w", err)
+		return "", "", fmt.Errorf("baca oauth.json: %w", err)
 	}
 	if strings.TrimSpace(cfg.ClientID) == "" {
-		return "", fmt.Errorf("oauth.json tanpa client_id")
+		return "", "", fmt.Errorf("oauth.json tanpa client_id")
 	}
-	return strings.TrimSpace(cfg.ClientID), nil
+	return strings.TrimSpace(cfg.ClientID), strings.TrimSpace(cfg.ClientSecret), nil
 }
 
 // OAuthStartURL membangun URL login Google dengan PKCE + offline access.
@@ -102,11 +107,12 @@ func (s *Service) OAuthWaitCallback(ctx context.Context, port int, state string)
 }
 
 // OAuthExchange menukar code dengan token (PKCE verifier) dan menyimpannya.
-func (s *Service) OAuthExchange(ctx context.Context, clientID, email, code, verifier string) error {
+func (s *Service) OAuthExchange(ctx context.Context, clientID, secret, email, code, verifier string) error {
 	conf := &oauth2.Config{
-		ClientID: clientID,
-		Endpoint: google.Endpoint,
-		Scopes:   []string{oauthScope},
+		ClientID:     clientID,
+		ClientSecret: secret,
+		Endpoint:     google.Endpoint,
+		Scopes:       []string{oauthScope},
 	}
 	tok, err := conf.Exchange(ctx, code,
 		oauth2.SetAuthURLParam("code_verifier", verifier))
@@ -135,11 +141,11 @@ func (s *Service) oauthToken(ctx context.Context, email string) (string, error) 
 	if err := json.Unmarshal([]byte(raw), &tok); err != nil {
 		return "", fmt.Errorf("baca token %s: %w", email, err)
 	}
-	clientID, err := s.oauthClientID()
+	clientID, secret, err := s.oauthConfig()
 	if err != nil {
 		return "", err
 	}
-	conf := &oauth2.Config{ClientID: clientID, Endpoint: google.Endpoint}
+	conf := &oauth2.Config{ClientID: clientID, ClientSecret: secret, Endpoint: google.Endpoint}
 	src := conf.TokenSource(ctx, &tok)
 	fresh, err := src.Token()
 	if err != nil {
@@ -157,7 +163,7 @@ func (s *Service) oauthToken(ctx context.Context, email string) (string, error) 
 // StartOAuthLogin menjalankan flow penuh di goroutine: buka browser,
 // tunggu callback, tukar code, lapor hasil via onUpdate.
 func (s *Service) StartOAuthLogin(ctx context.Context, email string, onDone func(err error)) error {
-	clientID, err := s.oauthClientID()
+	clientID, secret, err := s.oauthConfig()
 	if err != nil {
 		return err
 	}
@@ -175,7 +181,7 @@ func (s *Service) StartOAuthLogin(ctx context.Context, email string, onDone func
 		}
 		code, err := s.OAuthWaitCallback(ctx, port, state)
 		if err == nil {
-			err = s.OAuthExchange(ctx, clientID, email, code, verifier)
+			err = s.OAuthExchange(ctx, clientID, secret, email, code, verifier)
 		}
 		if onDone != nil {
 			onDone(err)
