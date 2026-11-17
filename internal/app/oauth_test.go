@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/emersion/go-sasl"
+	"golang.org/x/oauth2"
 	"karta/internal/mail"
 )
 
@@ -132,5 +133,23 @@ func TestSASLAuthSelection(t *testing.T) {
 	}
 	if _, ok := c.(sasl.Client); !ok {
 		t.Fatal("bukan sasl.Client")
+	}
+}
+
+// TestEmailFromIDToken memverifikasi ekstraksi klaim email dari JWT.
+func TestEmailFromIDToken(t *testing.T) {
+	makeTok := func(claims string) *oauth2.Token {
+		header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
+		payload := base64.RawURLEncoding.EncodeToString([]byte(claims))
+		tok := &oauth2.Token{AccessToken: "x"}
+		tok = tok.WithExtra(map[string]any{"id_token": header + "." + payload + ".sig"})
+		return tok
+	}
+	email, err := emailFromIDToken(makeTok(`{"email":"budi@gmail.com","email_verified":true}`))
+	if err != nil || email != "budi@gmail.com" {
+		t.Fatalf("email=%q err=%v", email, err)
+	}
+	if _, err := emailFromIDToken(makeTok(`{"sub":"123"}`)); err == nil {
+		t.Fatal("id_token tanpa email harus error")
 	}
 }

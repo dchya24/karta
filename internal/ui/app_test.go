@@ -65,8 +65,8 @@ func TestViewBuilds(t *testing.T) {
 	}
 }
 
-// TestAccountFormGoogle memastikan tombol Login via Google tampil, error
-// tanpa email muncul inline, dan semua field manual tetap ada.
+// TestAccountFormGoogle memastikan tombol Login via Google tampil, semua
+// field manual tetap ada, dan status OAuth inline tampil.
 func TestAccountFormGoogle(t *testing.T) {
 	st := &state{svc: testService(t)}
 	st.showAccount = true
@@ -77,12 +77,6 @@ func TestAccountFormGoogle(t *testing.T) {
 	if !tt.HasText("IMAP host") {
 		t.Fatal("field IMAP host tidak tampil")
 	}
-	// Klik Google tanpa email → pesan inline.
-	st.loginGoogle()
-	tt.Frame()
-	if !tt.HasText("Isi email dulu") {
-		t.Fatal("pesan minta email tidak tampil")
-	}
 	// Status OAuth inline.
 	st.oauthMsg, st.oauthFail = "Menunggu authorize di browser…", false
 	tt.Frame()
@@ -90,6 +84,7 @@ func TestAccountFormGoogle(t *testing.T) {
 		t.Fatal("status OAuth tidak tampil")
 	}
 }
+
 // TestViewSearch memastikan query pencarian memfilter daftar (FTS5).
 func TestViewSearch(t *testing.T) {
 	st := &state{svc: testService(t)}

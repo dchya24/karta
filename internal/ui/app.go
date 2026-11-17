@@ -37,7 +37,6 @@ type state struct {
 	// form tambah akun
 	showAccount bool
 	oauthBusy   bool   // flow OAuth sedang berjalan
-	oauthLogin  bool   // tombol Login via Google yang memicu simpan
 	oauthMsg    string // status/error OAuth tampil inline di form
 	oauthFail   bool   // oauthMsg = error (tampilkan merah)
 	fEmail      string
@@ -158,9 +157,8 @@ func (s *state) reloadMessages() {
 	}
 }
 
-// saveAccount membaca form, menyimpan akun, memicu sinkronisasi pertama.
-// Untuk OAuth: akun disimpan dulu (auth=oauth2), lalu flow login Google
-// berjalan di goroutine; sinkron dimulai setelah token didapat.
+// saveAccount membaca form manual (password), menyimpan akun, memicu
+// sinkronisasi pertama. Login Google punya jalur sendiri di loginGoogle.
 func (s *state) saveAccount() {
 	imapPort, err := strconv.Atoi(s.fIMAPPort)
 	if err != nil || imapPort <= 0 {
@@ -171,9 +169,6 @@ func (s *state) saveAccount() {
 		smtpPort = 465
 	}
 	method := app.AuthPassword
-	if s.oauthLogin { // tersimpan saat tombol Login via Google ditekan
-		method = app.AuthOAuth2
-	}
 	id, err := s.svc.AddAccount(context.Background(), app.AccountConfig{
 		Email: s.fEmail, Password: s.fPass,
 		IMAPHost: s.fIMAPHost, IMAPPort: imapPort, IMAPTLS: s.fIMAPTLS,
@@ -185,40 +180,9 @@ func (s *state) saveAccount() {
 		return
 	}
 	s.account = id
-	if !s.oauthLogin {
-		s.showAccount = false
-		s.reloadFolders()
-		s.refreshNow() // sinkron pertama langsung
-		return
-	}
-	// OAuth: buka browser + tunggu callback; jangan tutup form dulu.
-	win := s.win
-	s.oauthBusy, s.oauthMsg, s.oauthFail = true, "Menunggu authorize di browser…", false
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
-		defer cancel()
-		err := s.svc.StartOAuthLogin(ctx, s.fEmail, func(err error) {
-			win.Update(func() {
-				s.oauthBusy = false
-				if err != nil {
-					s.oauthMsg, s.oauthFail = err.Error(), true
-					log.Printf("ui: oauth: %v", err)
-					return
-				}
-				s.oauthLogin = false
-				s.showAccount = false
-				s.reloadFolders()
-				s.refreshNow()
-			})
-		})
-		if err != nil {
-			log.Printf("ui: mulai oauth: %v", err)
-			win.Update(func() {
-				s.oauthBusy = false
-				s.oauthMsg, s.oauthFail = err.Error(), true
-			})
-		}
-	}()
+	s.showAccount = false
+	s.reloadFolders()
+	s.refreshNow() // sinkron pertama langsung
 }
 
 // fetchBodyLazy mengambil isi pesan di goroutine bila belum ter-cache.
@@ -349,7 +313,6 @@ func (s *state) accountForm(c *ui.Context) {
 	}
 	ui.Row(c).Gap(12).Children(func() {
 		if ui.Button(c, s.saveLabel()).Clicked() && !s.oauthBusy {
-			s.oauthLogin = false
 			s.saveAccount()
 		}
 		if ui.Button(c, "Login via Google").Label("Login via Google (OAuth2)").Clicked() && !s.oauthBusy {
@@ -364,18 +327,46 @@ func (s *state) accountForm(c *ui.Context) {
 		TextColor(t.TextMuted).FontSize(12)
 }
 
-// loginGoogle menyiapkan akun Gmail lalu memicu flow OAuth — cukup satu
-// klik: butuh email terisi di form.
+// loginGoogle memicu flow OAuth dari satu klik — tanpa input email:
+// email akun dibaca otomatis dari id_token Google, lalu akun Gmail dibuat.
 func (s *state) loginGoogle() {
-	if s.fEmail == "" {
-		s.oauthMsg, s.oauthFail = "Isi email dulu, lalu klik Login via Google.", true
-		return
-	}
-	s.oauthLogin = true
-	s.fIMAPHost, s.fIMAPPort = "imap.gmail.com", "993"
-	s.fSMTPHost, s.fSMTPPort = "smtp.gmail.com", "465"
-	s.fIMAPTLS = true
-	s.saveAccount()
+	win := s.win
+	s.oauthBusy, s.oauthMsg, s.oauthFail = true, "Menunggu authorize di browser…", false
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+		defer cancel()
+		err := s.svc.StartOAuthLogin(ctx, func(email string, err error) {
+			win.Update(func() {
+				s.oauthBusy = false
+				if err != nil {
+					s.oauthMsg, s.oauthFail = err.Error(), true
+					log.Printf("ui: oauth: %v", err)
+					return
+				}
+				id, aerr := s.svc.AddAccount(context.Background(), app.AccountConfig{
+					Email: email, IMAPHost: "imap.gmail.com", IMAPPort: 993, IMAPTLS: true,
+					SMTPHost: "smtp.gmail.com", SMTPPort: 465, SMTPTLS: true,
+					Auth: app.AuthOAuth2,
+				})
+				if aerr != nil {
+					s.oauthMsg, s.oauthFail = aerr.Error(), true
+					log.Printf("ui: oauth add akun: %v", aerr)
+					return
+				}
+				s.account = id
+				s.showAccount = false
+				s.reloadFolders()
+				s.refreshNow()
+			})
+		})
+		if err != nil {
+			log.Printf("ui: mulai oauth: %v", err)
+			win.Update(func() {
+				s.oauthBusy = false
+				s.oauthMsg, s.oauthFail = err.Error(), true
+			})
+		}
+	}()
 }
 
 // row menggambar satu baris daftar pesan.
