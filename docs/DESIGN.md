@@ -142,7 +142,13 @@ collapse ≥2 newline kosong. Unit test wajib di AGENTS.md.
 
 ## 8. Risiko terbuka
 
-1. RAM < 35 MB: FTS5 index + modernc binary + toolkit GPU — perlu benchmark awal sebelum fitur bertumpuk.
+1. **RAM idle (revisi hasil benchmark 2026-11-17, mesin: CachyOS, AMD Ryzen 5500U iGPU, KDE Wayland):**
+   - Window ter-render: **~140–149 MB RSS** — konsisten untuk app Karta penuh MAUPUN `examples/counter-native` mygo (window hello-world 360×260 = 141 MB). Baseline ini milik backend render Linux mygo v0.9.2 (GPU buffer + driver Mesa + wayland pools), bukan beban aplikasi: Go heap saat idle cuma ~1 MB (gctrace), SQLite/store-only = 18 MB, widget standalone = 4 MB.
+   - Window tak ter-map (KDE blok fokus): 2–6 MB.
+   - Target PRD "< 35 MB" **tidak tercapai** dengan mygo v0.9.2 di Linux — pilihan: (a) laporkan/duplikasi ke upstream mygo, (b) revisi target menjadi "< 150 MB (Linux, GPU-rendered); 35 MB macOS", (c) evaluasi ulang bila upstream memperbaiki alokasi buffer.
+   - Cold start (window siap): 104–137 ms warm, 1.7 s run pertama (init GPU/font). Target < 300 ms ✅.
+   - Search FTS5 10.000 email: 42 ms (2 token, prefix) — target < 50 ms ✅. Catatan: angka bergantung distribusi kosakata; re-bench dengan korpus email nyata sebelum rilis.
+   - `go run` menambah proses toolchain ~39 MB sebagai parent — produksi/ukur memori wajib pakai binary tunggal (pandacode-run.sh sudah build-then-exec).
 2. go-imap v2 beta: pin `v2.0.0-beta.9`, duga API berubah di v0.2.
 3. `ui.Link` — verifikasi interaktifnya di window nyata saat scaffold pertama (riset statis cukup, uji runtime menyusul).
 
