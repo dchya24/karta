@@ -2,8 +2,12 @@ package app
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/emersion/go-imap/v2"
 
 	"karta/internal/mail"
 	"karta/internal/store"
@@ -34,7 +38,7 @@ func (s *appendStub) FetchRaw(ctx context.Context, mailbox string, uid uint32) (
 	return nil, nil
 }
 
-func (s *appendStub) Append(ctx context.Context, mailbox string, data []byte) error {
+func (s *appendStub) Append(ctx context.Context, mailbox string, data []byte, _ ...imap.Flag) error {
 	s.appends = append(s.appends, appendCall{mailbox, string(data)})
 	return nil
 }
@@ -155,5 +159,91 @@ func TestAttachmentDataAndRawHTML(t *testing.T) {
 	has, err := svc.db.HasRawHTML(id)
 	if err != nil || !has {
 		t.Fatalf("HasRawHTML %v %v", has, err)
+	}
+}
+
+// flakyDial adalah stub dial yang gagal transient sebanyak failTimes,
+// lalu sukses — untuk menguji retry backoff.
+func TestRefreshRetriesTransient(t *testing.T) {
+	svc := newTestService(t)
+	accID, _ := svc.AddAccount(context.Background(), AccountConfig{
+		Email: "aku@contoh.id", Password: "pw",
+		IMAPHost: "imap.contoh.id", IMAPPort: 993, IMAPTLS: true,
+		SMTPHost: "smtp.contoh.id", SMTPPort: 465, SMTPTLS: true,
+	})
+	oldDial, oldAttempts, oldDelay := imapDial, retryAttempts, retryBaseDelay
+	retryAttempts, retryBaseDelay = 3, 1*time.Millisecond
+	attempts := 0
+	imapDial = func(cfg mail.IMAPConfig) (IMAPClient, error) {
+		attempts++
+		if attempts <= 2 {
+			return nil, &mail.TransientError{Op: "dial", Err: errors.New("refused")}
+		}
+		return &appendStub{boxes: []mail.MailboxInfo{{Name: "INBOX", Role: "inbox"}}}, nil
+	}
+	defer func() {
+		imapDial, retryAttempts, retryBaseDelay = oldDial, oldAttempts, oldDelay
+	}()
+
+	if err := svc.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 3 {
+		t.Fatalf("percobaan dial %d, mau 3 (2 transient lalu sukses)", attempts)
+	}
+	_ = accID
+}
+
+// TestRefreshFailsFastOnAuth memastikan salah kredensial TIDAK diretry.
+func TestRefreshFailsFastOnAuth(t *testing.T) {
+	svc := newTestService(t)
+	svc.AddAccount(context.Background(), AccountConfig{
+		Email: "aku@contoh.id", Password: "pw-salah",
+		IMAPHost: "imap.contoh.id", IMAPPort: 993, IMAPTLS: true,
+		SMTPHost: "smtp.contoh.id", SMTPPort: 465, SMTPTLS: true,
+	})
+	oldDial, oldAttempts, oldDelay := imapDial, retryAttempts, retryBaseDelay
+	retryAttempts, retryBaseDelay = 3, 1*time.Millisecond
+	attempts := 0
+	authErr := &imap.Error{Type: imap.StatusResponseTypeNo,
+		Code: imap.ResponseCodeAuthenticationFailed, Text: "bad"}
+	imapDial = func(cfg mail.IMAPConfig) (IMAPClient, error) {
+		attempts++
+		return nil, authErr
+	}
+	defer func() {
+		imapDial, retryAttempts, retryBaseDelay = oldDial, oldAttempts, oldDelay
+	}()
+
+	_ = svc.Refresh(context.Background()) // error per akun di-log, bukan di-return
+	if attempts != 1 {
+		t.Fatalf("auth gagal tidak boleh diretry: %d percobaan", attempts)
+	}
+}
+
+// TestSendDraftGmailSkipsSentCopy memastikan Google tidak di-APPEND ke Sent.
+func TestSendDraftGmailSkipsSentCopy(t *testing.T) {
+	svc := newTestService(t)
+	port := smtpFakePort(t)
+	accID, err := svc.AddAccount(context.Background(), AccountConfig{
+		Email: "user@gmail.com", Password: "app-password",
+		IMAPHost: "imap.gmail.com", IMAPPort: 993, IMAPTLS: true,
+		SMTPHost: "127.0.0.1", SMTPPort: port, SMTPTLS: false, // fake SMTP lokal
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stub := &appendStub{boxes: []mail.MailboxInfo{{Name: "[Gmail]/Sent Mail", Role: "sent"}}}
+	oldDial, oldDelay := imapDial, retryBaseDelay
+	retryBaseDelay = 1 * time.Millisecond
+	imapDial = func(cfg mail.IMAPConfig) (IMAPClient, error) { return stub, nil }
+	defer func() { imapDial, retryBaseDelay = oldDial, oldDelay }()
+
+	if err := svc.SendDraft(context.Background(), accID, Draft{
+		To: "teman@contoh.id", Subject: "kirim gmail", Body: "isi"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(stub.appends) != 0 {
+		t.Fatalf("Gmail tidak boleh di-APPEND ke Sent: %+v", stub.appends)
 	}
 }

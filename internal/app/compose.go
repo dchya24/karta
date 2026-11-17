@@ -6,13 +6,15 @@ import (
 	"log"
 	"strings"
 
+	"github.com/emersion/go-imap/v2"
+
 	"karta/internal/mail"
 	"karta/internal/store"
 )
 
 // appender adalah IMAPClient yang mendukung APPEND (mail.Client).
 type appender interface {
-	Append(ctx context.Context, mailbox string, data []byte) error
+	Append(ctx context.Context, mailbox string, data []byte, flags ...imap.Flag) error
 }
 
 // parseAddrList memecah string "a@b, Nama <c@d>" menjadi daftar alamat.
@@ -80,6 +82,12 @@ func (s *Service) SendDraft(ctx context.Context, accountID int, d Draft) error {
 	if err != nil {
 		return fmt.Errorf("buat salinan Sent: %w", err)
 	}
+	// Gmail (dan layanan yang auto-copy via SMTP submission) tidak boleh
+	// di-APPEND ke Sent: pesan akan dobel.
+	if isGoogleAccount(acc) {
+		log.Printf("app: %s via Google SMTP — salinan Sent dibiarkan ke server", acc.Email)
+		return nil
+	}
 	if err := ap.Append(ctx, box, copyBytes); err != nil {
 		log.Printf("app: append salinan Sent: %v", err)
 	}
@@ -114,7 +122,17 @@ func (s *Service) SaveDraft(ctx context.Context, accountID int, d Draft) error {
 	if err != nil {
 		return err
 	}
-	return ap.Append(ctx, box, data)
+	return ap.Append(ctx, box, data, imap.FlagDraft)
+}
+
+// isGoogleAccount true untuk Gmail/Google Workspace: SMTP submission Google
+// otomatis menyimpan salinan Sent, jadi APPEND manual tidak boleh dilakukan.
+func isGoogleAccount(acc store.Account) bool {
+	d := strings.ToLower(acc.Email[strings.LastIndexByte(acc.Email, '@')+1:])
+	h := strings.ToLower(acc.SMTPHost)
+	return d == "gmail.com" || d == "googlemail.com" ||
+		strings.Contains(h, "gmail-smtp") || strings.Contains(h, "aspmx") ||
+		h == "smtp.gmail.com" || strings.HasSuffix(h, ".google.com")
 }
 
 // accountByID mengembalikan satu akun berdasarkan ID.

@@ -30,3 +30,13 @@ func (db *DB) HasRawHTML(messageID int64) (bool, error) {
 	}
 	return len(rawHTML) > 0, nil
 }
+
+// SetHasAttachment mengubah indikator lampiran pesan (hasil parse body
+// saat lazy-fetch; sebagian server seperti Gmail tidak menawarkan flag).
+func (db *DB) SetHasAttachment(messageID int64, has bool) error {
+	if _, err := db.Exec(`UPDATE messages SET has_attachment=? WHERE id=?`,
+		boolInt(has), messageID); err != nil {
+		return fmt.Errorf("set has_attachment pesan %d: %w", messageID, err)
+	}
+	return nil
+}

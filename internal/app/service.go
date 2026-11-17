@@ -256,6 +256,10 @@ func (s *Service) fetchAndStoreBody(ctx context.Context, id, folderID int64, uid
 	if err := s.db.SetMessageBody(id, body); err != nil {
 		return err
 	}
+	if len(parsed.Attachments) > 0 {
+		// Gmail dkk. tidak menawarkan flag lampiran: deteksi dari hasil parse.
+		_ = s.db.SetHasAttachment(id, true)
+	}
 	for _, att := range parsed.Attachments {
 		if err := s.db.InsertAttachment(id, att.Filename, att.ContentType, att.Data); err != nil {
 			return err
@@ -290,12 +294,43 @@ var coreRoles = map[string]bool{
 	"inbox": true, "sent": true, "drafts": true, "trash": true, "archive": true,
 }
 
+// Retry: percobaan ulang per akun untuk error transient (dial/TLS/putus
+// koneksi), backoff eksponensial. Var agar test bisa mempercepat.
+var (
+	retryAttempts  = 3 // total percobaan termasuk yang pertama
+	retryBaseDelay = 1 * time.Second
+)
+
+// refreshAccount menjalankan sync satu akun dengan retry transient.
 func (s *Service) refreshAccount(ctx context.Context, acc store.Account) error {
 	ctx, cancel := context.WithTimeout(ctx, perAccountTimeout)
 	defer cancel()
-	pass, err := s.keyring.Get(keyringService, acc.Email)
+	delay := retryBaseDelay
+	for attempt := 1; ; attempt++ {
+		err := s.tryRefreshAccount(ctx, acc)
+		if err == nil {
+			return nil
+		}
+		if !mail.IsTransient(err) || attempt == retryAttempts {
+			return err
+		}
+		log.Printf("app: sync %s gagal (percobaan %d/%d), ulang dalam %s: %v",
+			acc.Email, attempt, retryAttempts, delay, err)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+		delay *= 4
+	}
+}
+
+// tryRefreshAccount satu percobaan sync penuh: dial, daftar folder, fetch
+// header baru folder inti.
+func (s *Service) tryRefreshAccount(ctx context.Context, acc store.Account) error {
+	pass, err := s.getPassword(acc.Email)
 	if err != nil {
-		return fmt.Errorf("baca kredensial: %w", err)
+		return err
 	}
 	cl, err := imapDial(mail.IMAPConfig{Host: acc.IMAPHost, Port: acc.IMAPPort,
 		TLS: acc.IMAPTLS, User: acc.Email, Pass: pass})

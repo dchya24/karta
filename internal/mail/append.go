@@ -9,11 +9,12 @@ import (
 
 // Append mengunggah satu pesan utuh (RFC822) ke mailbox — dipakai untuk
 // menyimpan draft ke Drafts dan salinan pesan terkirim ke Sent.
-func (cl *Client) Append(ctx context.Context, mailbox string, data []byte) error {
+func (cl *Client) Append(ctx context.Context, mailbox string, data []byte, flags ...imap.Flag) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	cmd := cl.c.Append(mailbox, int64(len(data)), &imap.AppendOptions{})
+	opts := &imap.AppendOptions{Flags: flags}
+	cmd := cl.c.Append(mailbox, int64(len(data)), opts)
 	if _, err := cmd.Write(data); err != nil {
 		return fmt.Errorf("APPEND %s: tulis data: %w", mailbox, err)
 	}

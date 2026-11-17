@@ -58,7 +58,7 @@ func DialIMAP(cfg IMAPConfig) (*Client, error) {
 		c, err = imapclient.DialStartTLS(addr, nil)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("koneksi IMAP %s: %w", addr, err)
+		return nil, &TransientError{Op: fmt.Sprintf("koneksi IMAP %s", addr), Err: err}
 	}
 	cl := &Client{c: c}
 	if err := c.Login(cfg.User, cfg.Pass).Wait(); err != nil {
