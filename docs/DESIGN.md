@@ -142,6 +142,16 @@ collapse ≥2 newline kosong. Unit test wajib di AGENTS.md.
 
 ## 8. Risiko terbuka
 
+## 8a. Desain OAuth 2.0 (v0.2, Google)
+
+- **Mekanisme SASL**: XOAUTH2 untuk IMAP (`AUTHENTICATE XOAUTH2`, initial response base64 `user=<email>\x01auth=Bearer <token>\x01\x01`) dan SMTP (`AUTH XOAUTH2` via custom `smtp.Auth`). go-sasl hanya punya OAUTHBEARER (tidak didukung Gmail IMAP) — XOAUTH2 ditulis manual.
+- **Flow**: browser sistem + loopback `http://127.0.0.1:<port_acak>` (RFC 8252-style), PKCE tanpa client secret, `access_type=offline` untuk refresh token, scope `https://mail.google.com/`.
+- **Konfigurasi**: `client_id` dari env `KARTA_OAUTH_CLIENT_ID` atau `~/.config/karta/oauth.json`. Tanpa secret — client Desktop.
+- **Token**: akses + refresh disimpan JSON di OS keyring (`karta-oauth/<email>`); refresh otomatis via `golang.org/x/oauth2` TokenSource; penyimpanan ulang tiap token berganti.
+- **Skema DB**: migrasi v2 — kolom `accounts.auth` (`password`|`oauth2`).
+- **Kebijakan Google**: scope mail.google.com = restricted → distribusi butuh verifikasi (CASA); mode Testing = cap 100 user + refresh token expired 7 hari. Lihat PRD §5.
+- **Kegagalan token invalid_grant** = permanen (bukan transient) → user login ulang via UI.
+
 1. **RAM idle (revisi hasil benchmark 2026-11-17, mesin: CachyOS, AMD Ryzen 5500U iGPU, KDE Wayland):**
    - Window ter-render: **~140–149 MB RSS** — konsisten untuk app Karta penuh MAUPUN `examples/counter-native` mygo (window hello-world 360×260 = 141 MB). Baseline ini milik backend render Linux mygo v0.9.2 (GPU buffer + driver Mesa + wayland pools), bukan beban aplikasi: Go heap saat idle cuma ~1 MB (gctrace), SQLite/store-only = 18 MB, widget standalone = 4 MB.
    - Window tak ter-map (KDE blok fokus): 2–6 MB.

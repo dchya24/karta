@@ -16,7 +16,9 @@ type IMAPConfig struct {
 	Port int
 	TLS  bool
 	User string
+	// Pass berisi password (AuthPassword) ATAU access token (AuthOAuth2).
 	Pass string
+	Auth AuthMethod
 }
 
 // MailboxInfo adalah satu folder IMAP beserta peran khususnya bila
@@ -61,9 +63,21 @@ func DialIMAP(cfg IMAPConfig) (*Client, error) {
 		return nil, &TransientError{Op: fmt.Sprintf("koneksi IMAP %s", addr), Err: err}
 	}
 	cl := &Client{c: c}
-	if err := c.Login(cfg.User, cfg.Pass).Wait(); err != nil {
+	saslClient, err := SASLAuth(cfg.Auth, cfg.User, cfg.Pass)
+	if err != nil {
 		c.Close()
-		return nil, fmt.Errorf("login IMAP %s: %w", cfg.User, err)
+		return nil, err
+	}
+	if cfg.Auth == AuthOAuth2 {
+		if err := c.Authenticate(saslClient); err != nil {
+			c.Close()
+			return nil, fmt.Errorf("auth XOAUTH2 %s: %w", cfg.User, err)
+		}
+	} else {
+		if err := c.Login(cfg.User, cfg.Pass).Wait(); err != nil {
+			c.Close()
+			return nil, fmt.Errorf("login IMAP %s: %w", cfg.User, err)
+		}
 	}
 	return cl, nil
 }

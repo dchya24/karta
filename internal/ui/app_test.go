@@ -18,7 +18,7 @@ func testService(t *testing.T) *app.Service {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	accID, err := db.AddAccount("a@contoh.id", "imap", 993, true, "smtp", 465, true)
+	accID, err := db.AddAccount("a@contoh.id", "imap", 993, true, "smtp", 465, true, "")
 	if err != nil {
 		t.Fatal(err)
 	}

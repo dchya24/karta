@@ -22,7 +22,9 @@ type SMTPConfig struct {
 	Port int
 	TLS  bool
 	User string
+	// Pass berisi password (AuthPassword) ATAU access token (AuthOAuth2).
 	Pass string
+	Auth AuthMethod
 }
 
 // OutgoingMessage adalah pesan keluar sebelum dibungkus MIME.
@@ -213,9 +215,10 @@ func SendMail(cfg SMTPConfig, msg OutgoingMessage) error {
 	}
 	defer c.Close()
 	if cfg.User != "" {
-		// PlainAuth menolak koneksi tanpa TLS (kecuali localhost): kebijakan
-		// net/smtp, sesuai praktik aman.
-		auth := smtp.PlainAuth("", cfg.User, cfg.Pass, cfg.Host)
+		auth, err := SMTPAuth(cfg.Auth, cfg.Host, cfg.User, cfg.Pass)
+		if err != nil {
+			return err
+		}
 		if err := c.Auth(auth); err != nil {
 			return fmt.Errorf("auth SMTP %s: %w", cfg.Host, err)
 		}

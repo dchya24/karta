@@ -57,6 +57,8 @@ var migrations = []string{
 	`CREATE VIRTUAL TABLE messages_fts USING fts5(
 		subject, sender_addr, recipients, plain_text
 	)`,
+	// v2: kolom metode autentikasi akun (password | oauth2).
+	`ALTER TABLE accounts ADD COLUMN auth TEXT NOT NULL DEFAULT 'password'`,
 }
 
 // migrate menjalankan migrasi yang belum diterapkan, sekaligus memverifikasi

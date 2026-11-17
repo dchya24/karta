@@ -1,0 +1,74 @@
+package app
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"fmt"
+	"net"
+	"os/exec"
+	"runtime"
+
+	"karta/internal/mail"
+	"karta/internal/store"
+)
+
+// randomToken menghasilkan string acak url-safe n karakter.
+func randomToken(n int) string {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+// pkceS256 menghitung challenge PKCE dari verifier (RFC 7636).
+func pkceS256(verifier string) string {
+	sum := sha256.Sum256([]byte(verifier))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
+// freePort meminta OS port kosong (untuk server callback).
+func freePort() (int, error) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, fmt.Errorf("cari port kosong: %w", err)
+	}
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port, nil
+}
+
+// openInSystemBrowser membuka URL di browser default OS.
+func openInSystemBrowser(url string) error {
+	switch runtime.GOOS {
+	case "linux":
+		return exec.Command("xdg-open", url).Start()
+	case "darwin":
+		return exec.Command("open", url).Start()
+	default:
+		return exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+	}
+}
+
+// dialIMAP membuka koneksi IMAP akun sesuai metode autentikasinya:
+// password (keyring) atau OAuth2 (token keyring + refresh otomatis).
+func (s *Service) dialIMAP(ctx context.Context, acc store.Account) (IMAPClient, error) {
+	secret, err := s.getPassword(acc.Email)
+	if err != nil {
+		return nil, err
+	}
+	method := mail.AuthPassword
+	if acc.Auth == "oauth2" {
+		method = mail.AuthOAuth2
+		if secret, err = s.oauthToken(ctx, acc.Email); err != nil {
+			return nil, err
+		}
+	}
+	cl, err := imapDial(mail.IMAPConfig{Host: acc.IMAPHost, Port: acc.IMAPPort,
+		TLS: acc.IMAPTLS, User: acc.Email, Pass: secret, Auth: method})
+	if err != nil {
+		return nil, err
+	}
+	return cl, nil
+}

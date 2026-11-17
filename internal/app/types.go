@@ -9,6 +9,14 @@ type Account struct {
 	Email string `json:"email"`
 }
 
+// AuthMethod menentukan cara login ke server email.
+type AuthMethod string
+
+const (
+	AuthPassword AuthMethod = "password" // default; App Password untuk Gmail
+	AuthOAuth2   AuthMethod = "oauth2"   // XOAUTH2 (Google)
+)
+
 // Folder adalah folder IMAP pada satu akun.
 type Folder struct {
 	ID        int    `json:"id"`
@@ -50,17 +58,18 @@ type Message struct {
 	Attachments []Attachment `json:"attachments"`
 }
 
-// AccountConfig adalah data konfigurasi akun baru. Password dikirim ke
-// keyring dan tidak pernah disimpan di database maupun file.
+// AccountConfig adalah data konfigurasi akun baru. Password/token dikirim
+// ke keyring dan tidak pernah disimpan di database maupun file.
 type AccountConfig struct {
-	Email    string `json:"email"`
-	Password string `json:"-"` // tidak pernah ikut serialisasi
-	IMAPHost string `json:"imapHost"`
-	IMAPPort int    `json:"imapPort"`
-	IMAPTLS  bool   `json:"imapTls"`
-	SMTPHost string `json:"smtpHost"`
-	SMTPPort int    `json:"smtpPort"`
-	SMTPTLS  bool   `json:"smtpTls"`
+	Email    string     `json:"email"`
+	Password string     `json:"-"` // tidak pernah ikut serialisasi
+	IMAPHost string     `json:"imapHost"`
+	IMAPPort int        `json:"imapPort"`
+	IMAPTLS  bool       `json:"imapTls"`
+	SMTPHost string     `json:"smtpHost"`
+	SMTPPort int        `json:"smtpPort"`
+	SMTPTLS  bool       `json:"smtpTls"`
+	Auth     AuthMethod `json:"auth"` // kosong = password
 }
 
 // Draft adalah pesan yang sedang disusun: Compose baru, Reply, atau

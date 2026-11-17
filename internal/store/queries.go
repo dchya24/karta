@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// Account adalah baris tabel accounts. Password TIDAK ada di sini (keyring).
+// Account adalah baris tabel accounts. Secret TIDAK ada di sini (keyring).
 type Account struct {
 	ID       int
 	Email    string
@@ -17,6 +17,7 @@ type Account struct {
 	SMTPHost string
 	SMTPPort int
 	SMTPTLS  bool
+	Auth     string // "password" (default) | "oauth2"
 }
 
 // Folder adalah folder IMAP terdaftar beserta hitungan belum dibaca.
@@ -53,11 +54,14 @@ type MessageBody struct {
 }
 
 // AddAccount menyimpan akun baru; kembalikan ID-nya.
-func (db *DB) AddAccount(email, imapHost string, imapPort int, imapTLS bool, smtpHost string, smtpPort int, smtpTLS bool) (int64, error) {
+func (db *DB) AddAccount(email, imapHost string, imapPort int, imapTLS bool, smtpHost string, smtpPort int, smtpTLS bool, auth string) (int64, error) {
+	if auth == "" {
+		auth = "password"
+	}
 	res, err := db.Exec(`INSERT INTO accounts
-		(email, imap_host, imap_port, imap_tls, smtp_host, smtp_port, smtp_tls)
-		VALUES (?,?,?,?,?,?,?)`,
-		email, imapHost, imapPort, boolInt(imapTLS), smtpHost, smtpPort, boolInt(smtpTLS))
+		(email, imap_host, imap_port, imap_tls, smtp_host, smtp_port, smtp_tls, auth)
+		VALUES (?,?,?,?,?,?,?,?)`,
+		email, imapHost, imapPort, boolInt(imapTLS), smtpHost, smtpPort, boolInt(smtpTLS), auth)
 	if err != nil {
 		return 0, fmt.Errorf("simpan akun %s: %w", email, err)
 	}
@@ -67,7 +71,7 @@ func (db *DB) AddAccount(email, imapHost string, imapPort int, imapTLS bool, smt
 // ListAccounts mengembalikan semua akun terurut email.
 func (db *DB) ListAccounts() ([]Account, error) {
 	rows, err := db.Query(`SELECT id, email, imap_host, imap_port, imap_tls,
-		smtp_host, smtp_port, smtp_tls FROM accounts ORDER BY email`)
+		smtp_host, smtp_port, smtp_tls, auth FROM accounts ORDER BY email`)
 	if err != nil {
 		return nil, fmt.Errorf("daftar akun: %w", err)
 	}
@@ -77,10 +81,13 @@ func (db *DB) ListAccounts() ([]Account, error) {
 		var a Account
 		var itls, stls int
 		if err := rows.Scan(&a.ID, &a.Email, &a.IMAPHost, &a.IMAPPort, &itls,
-			&a.SMTPHost, &a.SMTPPort, &stls); err != nil {
+			&a.SMTPHost, &a.SMTPPort, &stls, &a.Auth); err != nil {
 			return nil, fmt.Errorf("baca akun: %w", err)
 		}
 		a.IMAPTLS, a.SMTPTLS = itls == 1, stls == 1
+		if a.Auth == "" {
+			a.Auth = "password"
+		}
 		out = append(out, a)
 	}
 	return out, rows.Err()

@@ -35,6 +35,8 @@ type state struct {
 
 	// form tambah akun
 	showAccount bool
+	fOAuth      bool // form pakai login Google (OAuth2)
+	oauthBusy   bool // flow OAuth sedang berjalan
 	fEmail      string
 	fPass       string
 	fIMAPHost   string
@@ -146,6 +148,8 @@ func (s *state) reloadMessages() {
 }
 
 // saveAccount membaca form, menyimpan akun, memicu sinkronisasi pertama.
+// Untuk OAuth: akun disimpan dulu (auth=oauth2), lalu flow login Google
+// berjalan di goroutine; sinkron dimulai setelah token didapat.
 func (s *state) saveAccount() {
 	imapPort, err := strconv.Atoi(s.fIMAPPort)
 	if err != nil || imapPort <= 0 {
@@ -155,19 +159,50 @@ func (s *state) saveAccount() {
 	if err != nil || smtpPort <= 0 {
 		smtpPort = 465
 	}
+	method := app.AuthPassword
+	if s.fOAuth {
+		method = app.AuthOAuth2
+	}
 	id, err := s.svc.AddAccount(context.Background(), app.AccountConfig{
 		Email: s.fEmail, Password: s.fPass,
 		IMAPHost: s.fIMAPHost, IMAPPort: imapPort, IMAPTLS: s.fIMAPTLS,
 		SMTPHost: s.fSMTPHost, SMTPPort: smtpPort, SMTPTLS: true,
+		Auth: method,
 	})
 	if err != nil {
 		log.Printf("ui: tambah akun: %v", err)
 		return
 	}
 	s.account = id
-	s.showAccount = false
-	s.reloadFolders()
-	s.refreshNow() // sinkron pertama langsung
+	if !s.fOAuth {
+		s.showAccount = false
+		s.reloadFolders()
+		s.refreshNow() // sinkron pertama langsung
+		return
+	}
+	// OAuth: buka browser + tunggu callback; jangan tutup form dulu.
+	win := s.win
+	s.oauthBusy = true
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+		defer cancel()
+		err := s.svc.StartOAuthLogin(ctx, s.fEmail, func(err error) {
+			win.Update(func() {
+				s.oauthBusy = false
+				if err != nil {
+					log.Printf("ui: oauth: %v", err)
+					return
+				}
+				s.showAccount = false
+				s.reloadFolders()
+				s.refreshNow()
+			})
+		})
+		if err != nil {
+			log.Printf("ui: mulai oauth: %v", err)
+			win.Update(func() { s.oauthBusy = false })
+		}
+	}()
 }
 
 // fetchBodyLazy mengambil isi pesan di goroutine bila belum ter-cache.
@@ -285,8 +320,9 @@ func (s *state) accountForm(c *ui.Context) {
 		ui.TextInputBase(c, &s.fSMTPPort).Width(80).Placeholder("465").Label("SMTP port")
 	})
 	ui.Checkbox(c, &s.fIMAPTLS, "Gunakan TLS untuk IMAP")
+	ui.Checkbox(c, &s.fOAuth, "Login via Google (OAuth2) — kosongkan password")
 	ui.Row(c).Gap(12).Children(func() {
-		if ui.Button(c, "Simpan").Clicked() {
+		if ui.Button(c, s.saveLabel()).Clicked() && !s.oauthBusy {
 			s.saveAccount()
 		}
 		if ui.Button(c, "Batal").Clicked() {
@@ -391,6 +427,14 @@ func (s *state) shortcuts(c *ui.Context) {
 	if c.Shortcut(0, ui.KeyF) && s.selected < len(s.msgs) {
 		s.openComposer("forward")
 	}
+}
+
+// saveLabel mengubah label tombol simpan saat OAuth berjalan.
+func (s *state) saveLabel() string {
+	if s.oauthBusy {
+		return "Menunggu Google…"
+	}
+	return "Simpan"
 }
 
 // shortDate memangkas timestamp ISO menjadi jam:menit singkat.

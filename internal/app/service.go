@@ -76,8 +76,12 @@ func (s *Service) AddAccount(ctx context.Context, cfg AccountConfig) (int, error
 	if cfg.Email == "" || cfg.IMAPHost == "" || cfg.SMTPHost == "" {
 		return 0, fmt.Errorf("konfigurasi akun tidak lengkap")
 	}
+	auth := string(cfg.Auth)
+	if auth == "" {
+		auth = "password"
+	}
 	id, err := s.db.AddAccount(cfg.Email, cfg.IMAPHost, cfg.IMAPPort, cfg.IMAPTLS,
-		cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPTLS)
+		cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPTLS, auth)
 	if err != nil {
 		return 0, err
 	}
@@ -234,12 +238,7 @@ func (s *Service) fetchAndStoreBody(ctx context.Context, id, folderID int64, uid
 	if acc == nil {
 		return fmt.Errorf("akun folder %d tidak ditemukan", folderID)
 	}
-	pass, err := s.keyring.Get(keyringService, acc.Email)
-	if err != nil {
-		return fmt.Errorf("baca kredensial %s: %w", acc.Email, err)
-	}
-	cl, err := imapDial(mail.IMAPConfig{Host: acc.IMAPHost, Port: acc.IMAPPort,
-		TLS: acc.IMAPTLS, User: acc.Email, Pass: pass})
+	cl, err := s.dialIMAP(ctx, *acc)
 	if err != nil {
 		return err
 	}
@@ -328,12 +327,7 @@ func (s *Service) refreshAccount(ctx context.Context, acc store.Account) error {
 // tryRefreshAccount satu percobaan sync penuh: dial, daftar folder, fetch
 // header baru folder inti.
 func (s *Service) tryRefreshAccount(ctx context.Context, acc store.Account) error {
-	pass, err := s.getPassword(acc.Email)
-	if err != nil {
-		return err
-	}
-	cl, err := imapDial(mail.IMAPConfig{Host: acc.IMAPHost, Port: acc.IMAPPort,
-		TLS: acc.IMAPTLS, User: acc.Email, Pass: pass})
+	cl, err := s.dialIMAP(ctx, acc)
 	if err != nil {
 		return err
 	}

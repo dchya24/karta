@@ -16,7 +16,7 @@ func seedBenchDB(b *testing.B, n int) *DB {
 		b.Fatal(err)
 	}
 	b.Cleanup(func() { db.Close() })
-	accID, err := db.AddAccount("bench@contoh.id", "imap", 993, true, "smtp", 465, true)
+	accID, err := db.AddAccount("bench@contoh.id", "imap", 993, true, "smtp", 465, true, "")
 	if err != nil {
 		b.Fatal(err)
 	}

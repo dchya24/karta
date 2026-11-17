@@ -15,7 +15,7 @@ func openTestDB(t *testing.T) *DB {
 func TestMigrateAndAccountCRUD(t *testing.T) {
 	db := openTestDB(t)
 	id, err := db.AddAccount("saya@contoh.id", "imap.contoh.id", 993, true,
-		"smtp.contoh.id", 465, true)
+		"smtp.contoh.id", 465, true, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,14 +27,14 @@ func TestMigrateAndAccountCRUD(t *testing.T) {
 		t.Fatalf("akun %+v", accs)
 	}
 	// Email unik.
-	if _, err := db.AddAccount("saya@contoh.id", "x", 1, false, "x", 1, false); err == nil {
+	if _, err := db.AddAccount("saya@contoh.id", "x", 1, false, "x", 1, false, ""); err == nil {
 		t.Fatal("email ganda harus gagal")
 	}
 }
 
 func TestFoldersAndMessages(t *testing.T) {
 	db := openTestDB(t)
-	accID, _ := db.AddAccount("a@contoh.id", "imap", 993, true, "smtp", 465, true)
+	accID, _ := db.AddAccount("a@contoh.id", "imap", 993, true, "smtp", 465, true, "")
 	inbox, err := db.EnsureFolder(accID, "INBOX", "inbox")
 	if err != nil {
 		t.Fatal(err)
@@ -94,7 +94,7 @@ func TestFoldersAndMessages(t *testing.T) {
 
 func TestGetMessageMarkReadAndBody(t *testing.T) {
 	db := openTestDB(t)
-	accID, _ := db.AddAccount("a@contoh.id", "imap", 993, true, "smtp", 465, true)
+	accID, _ := db.AddAccount("a@contoh.id", "imap", 993, true, "smtp", 465, true, "")
 	inbox, _ := db.EnsureFolder(accID, "INBOX", "inbox")
 	id, err := db.UpsertMessage(&MessageHeader{FolderID: int(inbox), UID: 7,
 		Subject: "s", Date: "2026-11-17T00:00:00Z", Unread: true}, nil)

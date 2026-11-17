@@ -51,18 +51,25 @@ func (s *Service) SendDraft(ctx context.Context, accountID int, d Draft) error {
 		return fmt.Errorf("penerima (To) kosong")
 	}
 	out := outgoingFromDraft(acc.Email, d)
-	pass, err := s.getPassword(acc.Email)
+	secret, err := s.getPassword(acc.Email)
 	if err != nil {
 		return err
 	}
+	method := mail.AuthPassword
+	if acc.Auth == "oauth2" {
+		method = mail.AuthOAuth2
+		secret, err = s.oauthToken(ctx, acc.Email)
+		if err != nil {
+			return err
+		}
+	}
 	if err := mail.SendMail(mail.SMTPConfig{Host: acc.SMTPHost, Port: acc.SMTPPort,
-		TLS: acc.SMTPTLS, User: acc.Email, Pass: pass}, out); err != nil {
+		TLS: acc.SMTPTLS, User: acc.Email, Pass: secret, Auth: method}, out); err != nil {
 		return err
 	}
 
 	// Salinan ke Sent, best-effort.
-	cl, err := imapDial(mail.IMAPConfig{Host: acc.IMAPHost, Port: acc.IMAPPort,
-		TLS: acc.IMAPTLS, User: acc.Email, Pass: pass})
+	cl, err := s.dialIMAP(ctx, acc)
 	if err != nil {
 		log.Printf("app: salinan Sent tidak dikirim: %v", err)
 		return nil
@@ -100,12 +107,7 @@ func (s *Service) SaveDraft(ctx context.Context, accountID int, d Draft) error {
 	if err != nil {
 		return err
 	}
-	pass, err := s.getPassword(acc.Email)
-	if err != nil {
-		return err
-	}
-	cl, err := imapDial(mail.IMAPConfig{Host: acc.IMAPHost, Port: acc.IMAPPort,
-		TLS: acc.IMAPTLS, User: acc.Email, Pass: pass})
+	cl, err := s.dialIMAP(ctx, acc)
 	if err != nil {
 		return err
 	}
