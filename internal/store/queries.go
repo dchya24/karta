@@ -3,6 +3,8 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"sort"
+	"strings"
 )
 
 // Account adalah baris tabel accounts. Password TIDAK ada di sini (keyring).
@@ -260,16 +262,83 @@ func (db *DB) ListMessages(folderID int64, query string) ([]MessageHeader, error
 		rows, err = db.Query(`SELECT `+cols+` FROM messages
 			WHERE folder_id=? ORDER BY date DESC, uid DESC`, folderID)
 	} else {
-		rows, err = db.Query(`SELECT `+cols+` FROM messages
-			WHERE folder_id=? AND id IN
-				(SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?)
-			ORDER BY date DESC, uid DESC`, folderID, ftsQuery(query))
+		// FTS-driven: ambil rowid hasil MATCH dulu, lalu ambil baris per
+		// batch via PK. JOIN lewat IN-subquery membuat planner memindai
+		// seluruh folder (10k+ baris) sebelum memfilter.
+		ids, err := db.selectFTSRowIDs(query)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]MessageHeader, 0, len(ids))
+		for start := 0; start < len(ids); start += 500 {
+			end := min(start+500, len(ids))
+			rows, err := db.fetchByIDs(folderID, ids[start:end])
+			if err != nil {
+				return nil, err
+			}
+			hdrs, err := scanHeaders(rows)
+			rows.Close()
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, hdrs...)
+		}
+		sortMessageHeaders(out)
+		return out, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("daftar pesan folder %d: %w", folderID, err)
 	}
 	defer rows.Close()
 	return scanHeaders(rows)
+}
+
+// selectFTSRowIDs mengembalikan rowid pesan yang cocok query FTS.
+func (db *DB) selectFTSRowIDs(query string) ([]int64, error) {
+	rows, err := db.Query(`SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?`,
+		ftsQuery(query))
+	if err != nil {
+		return nil, fmt.Errorf("cari FTS: %w", err)
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("baca hasil FTS: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// fetchByIDs mengambil header pesan berdasarkan ID (batch, PK lookup).
+func (db *DB) fetchByIDs(folderID int64, ids []int64) (*sql.Rows, error) {
+	ph := strings.Repeat("?,", len(ids))
+	args := make([]any, 0, len(ids)+1)
+	args = append(args, folderID)
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	const cols = `id, folder_id, uid, COALESCE(message_id,''), COALESCE(subject,''),
+		COALESCE(sender,''), COALESCE(sender_addr,''), COALESCE(recipients,''),
+		COALESCE(date,''), unread, has_attachment, size`
+	rows, err := db.Query(`SELECT `+cols+` FROM messages
+		WHERE folder_id=? AND id IN (`+ph[:len(ph)-1]+`)`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("ambil pesan batch: %w", err)
+	}
+	return rows, nil
+}
+
+// sortMessageHeaders mengurutkan terbaru dulu (date DESC, lalu UID DESC).
+func sortMessageHeaders(m []MessageHeader) {
+	sort.Slice(m, func(i, j int) bool {
+		if m[i].Date != m[j].Date {
+			return m[i].Date > m[j].Date
+		}
+		return m[i].UID > m[j].UID
+	})
 }
 
 // GetMessage mengembalikan header dan isi satu pesan.

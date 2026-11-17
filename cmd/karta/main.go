@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	"karta/internal/app"
 	"karta/internal/bridge"
@@ -14,6 +15,7 @@ import (
 )
 
 func main() {
+	startTime := time.Now()
 	dbPath, err := databasePath()
 	if err != nil {
 		log.Fatal(err)
@@ -28,6 +30,9 @@ func main() {
 	if err := bridge.Start(); err != nil {
 		log.Printf("bridge: %v", err)
 	}
+	ui.SetReadyLogger(func() {
+		log.Printf("karta: jendela siap dalam %s", time.Since(startTime))
+	})
 	if err := ui.Run(svc); err != nil {
 		log.Fatal(err)
 	}

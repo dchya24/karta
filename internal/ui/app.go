@@ -55,6 +55,12 @@ type state struct {
 	dStatus                   string
 }
 
+// readyLogger dipanggil saat window utama siap (untuk metrik cold start).
+var readyLogger func()
+
+// SetReadyLogger memasang callback metrik siap (dipanggil main).
+func SetReadyLogger(fn func()) { readyLogger = fn }
+
 // Run membuka window utama, memulai worker sinkronisasi, dan menjalankan
 // loop aplikasi sampai keluar.
 func Run(svc *app.Service) error {
@@ -71,6 +77,9 @@ func Run(svc *app.Service) error {
 		})
 		st.reloadFolders()
 		st.startSync(syncCtx)
+		if readyLogger != nil {
+			readyLogger()
+		}
 	})
 	return mygo.App.Run()
 }
