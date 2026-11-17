@@ -75,7 +75,7 @@ Pada rilis pertama (v0.1), Karta berfokus menjadi *email client* mandiri yang an
 
 ## 5. Metrik Keberhasilan (v0.1)
 - **Cold Startup Time:** < 300 ms hingga window utama tampil.
-- **Memory Footprint (Idle):** < 35 MB RAM.
+- **Memory Footprint (Idle):** ~140–150 MB RAM di Linux (baseline backend render GPU mygo v0.9.2 — window hello-world mygo sendiri = 141 MB; bukan beban aplikasi, lihat `docs/DESIGN.md` §8). Target < 35 MB berlaku di macOS. Diputuskan tetap setelah evaluasi migrasi Rust/gpui ditolak (2026-11-17).
 - **Pencarian Lokal (10.000 email):** < 50 ms menggunakan SQLite FTS5.
 - **Stabilitas Concurrency:** Nol *race condition* atau *UI freeze* saat sinkronisasi IMAP berjalan di latar belakang (dicek dengan `go test -race` pada `internal/sync` dan `internal/app`, lihat AGENTS.md §5).
 - **Arsitektur:** Tidak ada impor `internal/ui`/`mygo` dari `internal/mail`, `internal/store`, dan `internal/sync` (sesuai AGENTS.md §3.A).
