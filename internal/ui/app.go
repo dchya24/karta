@@ -242,7 +242,7 @@ func (s *state) view(c *ui.Context) {
 			} else {
 				ui.Text(c, "Belum ada akun.\nTekan + untuk menambah.").TextColor(t.TextMuted).Padding(16)
 			}
-			if ui.Button(c, "Sinkronkan").Label("Sinkronkan sekarang").Clicked() {
+			if ui.Button(c, "Sinkronkan").Label("Sinkronkan sekarang").MarginX(2).Clicked() {
 				s.refreshNow()
 			}
 		})
@@ -329,13 +329,15 @@ func (s *state) accountForm(c *ui.Context) {
 
 // loginGoogle memicu flow OAuth dari satu klik — tanpa input email:
 // email akun dibaca otomatis dari id_token Google, lalu akun Gmail dibuat.
+// Catatan: StartOAuthLogin asinkron — cancel() tidak boleh defer, harus
+// dipanggil saat flow selesai (di callback), bukan saat goroutine kembali.
 func (s *state) loginGoogle() {
 	win := s.win
 	s.oauthBusy, s.oauthMsg, s.oauthFail = true, "Menunggu authorize di browser…", false
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
-		defer cancel()
 		err := s.svc.StartOAuthLogin(ctx, func(email string, err error) {
+			cancel() // flow beres (sukses/gagal) — matikan server callback
 			win.Update(func() {
 				s.oauthBusy = false
 				if err != nil {
@@ -360,6 +362,7 @@ func (s *state) loginGoogle() {
 			})
 		})
 		if err != nil {
+			cancel()
 			log.Printf("ui: mulai oauth: %v", err)
 			win.Update(func() {
 				s.oauthBusy = false
