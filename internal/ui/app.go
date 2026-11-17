@@ -36,8 +36,10 @@ type state struct {
 
 	// form tambah akun
 	showAccount bool
-	fOAuth      bool // form pakai login Google (OAuth2)
-	oauthBusy   bool // flow OAuth sedang berjalan
+	fType       int    // 0 = Google (OAuth2), 1 = lainnya (password)
+	oauthBusy   bool   // flow OAuth sedang berjalan
+	oauthMsg    string // status/error OAuth tampil inline di form
+	oauthFail   bool   // oauthMsg = error (tampilkan merah)
 	fEmail      string
 	fPass       string
 	fIMAPHost   string
@@ -169,7 +171,7 @@ func (s *state) saveAccount() {
 		smtpPort = 465
 	}
 	method := app.AuthPassword
-	if s.fOAuth {
+	if s.fType == 0 {
 		method = app.AuthOAuth2
 	}
 	id, err := s.svc.AddAccount(context.Background(), app.AccountConfig{
@@ -183,7 +185,7 @@ func (s *state) saveAccount() {
 		return
 	}
 	s.account = id
-	if !s.fOAuth {
+	if s.fType != 0 {
 		s.showAccount = false
 		s.reloadFolders()
 		s.refreshNow() // sinkron pertama langsung
@@ -191,7 +193,7 @@ func (s *state) saveAccount() {
 	}
 	// OAuth: buka browser + tunggu callback; jangan tutup form dulu.
 	win := s.win
-	s.oauthBusy = true
+	s.oauthBusy, s.oauthMsg, s.oauthFail = true, "Menunggu authorize di browser…", false
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 		defer cancel()
@@ -199,6 +201,7 @@ func (s *state) saveAccount() {
 			win.Update(func() {
 				s.oauthBusy = false
 				if err != nil {
+					s.oauthMsg, s.oauthFail = err.Error(), true
 					log.Printf("ui: oauth: %v", err)
 					return
 				}
@@ -209,7 +212,10 @@ func (s *state) saveAccount() {
 		})
 		if err != nil {
 			log.Printf("ui: mulai oauth: %v", err)
-			win.Update(func() { s.oauthBusy = false })
+			win.Update(func() {
+				s.oauthBusy = false
+				s.oauthMsg, s.oauthFail = err.Error(), true
+			})
 		}
 	}()
 }
@@ -308,29 +314,51 @@ func (s *state) view(c *ui.Context) {
 	})
 }
 
-// accountForm menggambar form tambah akun.
+// accountForm menggambar form tambah akun. Pilih tipe akun dulu: Google
+// (OAuth2, host Gmail auto-fill) atau lainnya (IMAP/SMTP password).
 func (s *state) accountForm(c *ui.Context) {
+	t := c.Theme()
 	ui.Text(c, "Tambah Akun").Bold().FontSize(18)
+	if ui.Segmented(c, &s.fType, "Google (OAuth2)", "Lainnya (password)").
+		Label("Tipe akun").Width(360).Changed() && s.fType == 0 {
+		// Google: host Gmail sudah pasti — prefill.
+		s.fIMAPHost, s.fIMAPPort = "imap.gmail.com", "993"
+		s.fSMTPHost, s.fSMTPPort = "smtp.gmail.com", "465"
+		s.fIMAPTLS = true
+	}
 	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "Email").Width(120)
 		ui.TextInputBase(c, &s.fEmail).Grow(1).Placeholder("nama@contoh.id").Label("Email")
 	})
-	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "Password").Width(120)
-		ui.TextInputBase(c, &s.fPass).Grow(1).Password().Placeholder("App password").Label("Password")
-	})
-	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "IMAP host").Width(120)
-		ui.TextInputBase(c, &s.fIMAPHost).Grow(1).Placeholder("imap.contoh.id").Label("IMAP host")
-		ui.TextInputBase(c, &s.fIMAPPort).Width(80).Placeholder("993").Label("IMAP port")
-	})
-	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "SMTP host").Width(120)
-		ui.TextInputBase(c, &s.fSMTPHost).Grow(1).Placeholder("smtp.contoh.id").Label("SMTP host")
-		ui.TextInputBase(c, &s.fSMTPPort).Width(80).Placeholder("465").Label("SMTP port")
-	})
-	ui.Checkbox(c, &s.fIMAPTLS, "Gunakan TLS untuk IMAP")
-	ui.Checkbox(c, &s.fOAuth, "Login via Google (OAuth2) — kosongkan password")
+	if s.fType != 0 {
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "Password").Width(120)
+			ui.TextInputBase(c, &s.fPass).Grow(1).Password().Placeholder("App password").Label("Password")
+		})
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "IMAP host").Width(120)
+			ui.TextInputBase(c, &s.fIMAPHost).Grow(1).Placeholder("imap.contoh.id").Label("IMAP host")
+			ui.TextInputBase(c, &s.fIMAPPort).Width(80).Placeholder("993").Label("IMAP port")
+		})
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "SMTP host").Width(120)
+			ui.TextInputBase(c, &s.fSMTPHost).Grow(1).Placeholder("smtp.contoh.id").Label("SMTP host")
+			ui.TextInputBase(c, &s.fSMTPPort).Width(80).Placeholder("465").Label("SMTP port")
+		})
+		ui.Checkbox(c, &s.fIMAPTLS, "Gunakan TLS untuk IMAP")
+	} else {
+		ui.Text(c, "Login dibuka di browser sistem. Host Gmail diisi otomatis."+
+			"\nKlien ID Google: env KARTA_OAUTH_CLIENT_ID atau ~/.config/karta/oauth.json").
+			TextColor(t.TextMuted).FontSize(12)
+	}
+	if s.oauthMsg != "" {
+		msg := ui.Textf(c, "%s", s.oauthMsg).FontSize(12)
+		if s.oauthFail {
+			msg.TextColor(t.Danger)
+		} else {
+			msg.TextColor(t.TextMuted)
+		}
+	}
 	ui.Row(c).Gap(12).Children(func() {
 		if ui.Button(c, s.saveLabel()).Clicked() && !s.oauthBusy {
 			s.saveAccount()
