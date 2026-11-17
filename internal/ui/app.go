@@ -17,6 +17,7 @@ import (
 
 	"karta/internal/app"
 	"karta/internal/sync"
+	kartaicons "karta/assets/icons"
 )
 
 // state adalah kondisi UI: dibaca dan diubah hanya di main thread (view dan
@@ -77,6 +78,14 @@ func Run(svc *app.Service) error {
 			StateKey: "karta",
 			Content:  ui.View(st.view),
 		})
+		// Logo Karta: ikon window/taskbar (PNG) + ikon Dock (macOS).
+		// PNG di-embed agar binary tetap satu file.
+		if err := st.win.SetIcon(kartaicons.PNG256); err != nil {
+			log.Printf("karta: set icon: %v", err)
+		}
+		if err := mygo.App.Dock.SetIcon(kartaicons.PNG256); err != nil {
+			log.Printf("karta: set dock icon: %v", err)
+		}
 		st.reloadFolders()
 		st.startSync(syncCtx)
 		if readyLogger != nil {
@@ -237,7 +246,8 @@ func (s *state) view(c *ui.Context) {
 	ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {
 		// Pane 1: sidebar akun + folder + unread.
 		ui.Column(c).Width(220).Shrink(0).PaddingY(12).Gap(6).Background(t.Surface).Children(func() {
-			ui.Row(c).Padding(0, 16).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).Padding(0, 16).AlignItems(ui.Center).Gap(8).Children(func() {
+				ui.Image(c, kartaLogo).Size(28, 28)
 				ui.Text(c, "Karta").Bold().Grow(1)
 				if ui.Button(c, "+").Label("Tambah akun").Clicked() {
 					s.showAccount = !s.showAccount
