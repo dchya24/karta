@@ -214,6 +214,14 @@ func (s *state) view(c *ui.Context) {
 		return
 	}
 
+	// Form akun: layar penuh tanpa sidebar (responsif di lebar kecil).
+	if s.showAccount {
+		ui.Column(c).Fill().Padding(24, 32).Gap(10).Children(func() {
+			s.accountForm(c)
+		})
+		return
+	}
+
 	ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {
 		// Pane 1: sidebar akun + folder + unread.
 		ui.Column(c).Width(220).Shrink(0).PaddingY(12).Gap(6).Background(t.Surface).Children(func() {
@@ -227,11 +235,11 @@ func (s *state) view(c *ui.Context) {
 			if len(s.folders) > 0 {
 				if ui.Sidebar(c, &s.folderSel, func() {
 					for i, f := range s.folders {
-						label := f.Name
-						if f.Unread > 0 {
-							label += " (" + strconv.Itoa(f.Unread) + ")"
-						}
-						ui.SidebarItem(c, strconv.Itoa(i), nil, label)
+						ui.SidebarItem(c, strconv.Itoa(i), nil, f.Name).Children(func() {
+							if f.Unread > 0 {
+								ui.Badge(c, strconv.Itoa(f.Unread))
+							}
+						})
 					}
 				}).Grow(1).Label("Folder").Changed() {
 					if idx, err := strconv.Atoi(s.folderSel); err == nil && idx >= 0 && idx < len(s.folders) {
@@ -247,19 +255,13 @@ func (s *state) view(c *ui.Context) {
 			}
 		})
 
-		// Pane 2+3: daftar pesan | reading pane; atau form akun.
-		if s.showAccount {
-			ui.Column(c).Grow(1).MinWidth(0).Padding(24, 32).Gap(10).Children(func() {
-				s.accountForm(c)
-			})
-			return
-		}
+		// Pane 2+3: daftar pesan | reading pane.
 		var splitSize float32 = 380
 		ui.Split(c, &splitSize, func() {
 			ui.Column(c).Fill().Gap(0).Children(func() {
 				ui.Row(c).Padding(8, 10).Children(func() {
-					if ui.TextInputBase(c, &s.query).Grow(1).
-						Placeholder("Cari (FTS5 lokal)").Label("Cari").Changed() {
+					if ui.TextInput(c.Key("a-query"), &s.query).Grow(1).
+						Placeholder("Cari…").Label("Cari").Changed() {
 						s.reloadMessages()
 					}
 				})
@@ -286,21 +288,21 @@ func (s *state) accountForm(c *ui.Context) {
 	ui.Text(c, "Tambah Akun").Bold().FontSize(18)
 	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "Email").Width(120)
-		ui.TextInputBase(c, &s.fEmail).Grow(1).Placeholder("nama@contoh.id").Label("Email")
+		ui.TextInput(c.Key("a-email"), &s.fEmail).Grow(1).Placeholder("nama@contoh.id").Label("Email")
 	})
 	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "Password").Width(120)
-		ui.TextInputBase(c, &s.fPass).Grow(1).Password().Placeholder("App password").Label("Password")
+		ui.TextInput(c.Key("a-pass"), &s.fPass).Grow(1).Password().Placeholder("App password").Label("Password")
 	})
 	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "IMAP host").Width(120)
-		ui.TextInputBase(c, &s.fIMAPHost).Grow(1).Placeholder("imap.contoh.id").Label("IMAP host")
-		ui.TextInputBase(c, &s.fIMAPPort).Width(80).Placeholder("993").Label("IMAP port")
+		ui.TextInput(c.Key("a-imap"), &s.fIMAPHost).Grow(1).Placeholder("imap.contoh.id").Label("IMAP host")
+		ui.TextInput(c.Key("a-iport"), &s.fIMAPPort).Width(80).Placeholder("993").Label("IMAP port")
 	})
 	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "SMTP host").Width(120)
-		ui.TextInputBase(c, &s.fSMTPHost).Grow(1).Placeholder("smtp.contoh.id").Label("SMTP host")
-		ui.TextInputBase(c, &s.fSMTPPort).Width(80).Placeholder("465").Label("SMTP port")
+		ui.TextInput(c.Key("a-smtp"), &s.fSMTPHost).Grow(1).Placeholder("smtp.contoh.id").Label("SMTP host")
+		ui.TextInput(c.Key("a-sport"), &s.fSMTPPort).Width(80).Placeholder("465").Label("SMTP port")
 	})
 	ui.Checkbox(c, &s.fIMAPTLS, "Gunakan TLS untuk IMAP")
 	if s.oauthMsg != "" {
@@ -311,7 +313,7 @@ func (s *state) accountForm(c *ui.Context) {
 			msg.TextColor(t.TextMuted)
 		}
 	}
-	ui.Row(c).Gap(12).Children(func() {
+	ui.Row(c).Gap(12).Wrap().Children(func() {
 		if ui.Button(c, s.saveLabel()).Clicked() && !s.oauthBusy {
 			s.saveAccount()
 		}
@@ -380,14 +382,22 @@ func (s *state) row(c *ui.Context, i int) {
 	if m.Unread {
 		weight = 700
 	}
+	chosen := i == s.selected
 	suffix := ""
 	if m.HasAttachment {
 		suffix = " 📎"
 	}
 	ui.Row(c).Padding(8, 10).Gap(8).Children(func() {
 		ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
-			ui.Textf(c, "%s%s", sender, suffix).FontWeight(weight).Grow(0)
-			ui.Textf(c, "%s", subject).TextColor(t.TextMuted).FontSize(12)
+			senderText := ui.Textf(c, "%s%s", sender, suffix).FontWeight(weight).Grow(0)
+			subjectText := ui.Textf(c, "%s", subject).FontSize(12)
+			if chosen {
+				// Di atas latar seleksi: teks terang, bukan muted.
+				senderText.TextColor(t.AccentText)
+				subjectText.TextColor(t.AccentText)
+			} else {
+				subjectText.TextColor(t.TextMuted)
+			}
 		})
 		if m.Date != "" {
 			ui.Textf(c, "%s", shortDate(m.Date)).TextColor(t.TextMuted).FontSize(11)

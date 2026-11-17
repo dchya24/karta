@@ -22,15 +22,15 @@ func (s *state) composerForm(c *ui.Context) {
 
 	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "Kepada").Width(100)
-		ui.TextInputBase(c, &s.dTo).Grow(1).Placeholder("a@contoh.id, b@contoh.id").Label("Kepada")
+		ui.TextInput(c.Key("c-to"), &s.dTo).Grow(1).Placeholder("a@contoh.id, b@contoh.id").Label("Kepada")
 	})
 	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "Cc").Width(100)
-		ui.TextInputBase(c, &s.dCc).Grow(1).Placeholder("opsional").Label("Cc")
+		ui.TextInput(c.Key("c-cc"), &s.dCc).Grow(1).Placeholder("opsional").Label("Cc")
 	})
 	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "Subjek").Width(100)
-		ui.TextInputBase(c, &s.dSubject).Grow(1).Label("Subjek")
+		ui.TextInput(c.Key("c-subject"), &s.dSubject).Grow(1).Label("Subjek")
 	})
 
 	if s.dDoc == nil {
