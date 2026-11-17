@@ -230,3 +230,44 @@ func TestRefreshWithStub(t *testing.T) {
 func marshalJSON(v any) ([]byte, error) { return json.Marshal(v) }
 
 func contains(s, sub string) bool { return strings.Contains(s, sub) }
+
+// TestAddAccountUpsert: menambah akun dengan email yang sama memperbarui
+// konfigurasi (host baru) tanpa duplikat baris.
+func TestAddAccountUpsert(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	id, err := svc.AddAccount(ctx, AccountConfig{
+		Email: "aku@contoh.id", Password: "pw1",
+		IMAPHost: "imap.lama.id", IMAPPort: 993, IMAPTLS: true,
+		SMTPHost: "smtp.lama.id", SMTPPort: 465, SMTPTLS: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id2, err := svc.AddAccount(ctx, AccountConfig{
+		Email: "aku@contoh.id", Password: "pw2",
+		IMAPHost: "imap.gmail.com", IMAPPort: 993, IMAPTLS: true,
+		SMTPHost: "smtp.gmail.com", SMTPPort: 465, SMTPTLS: true,
+		Auth: AuthOAuth2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id2 != id {
+		t.Fatalf("upsert buat ID baru: %d vs %d", id2, id)
+	}
+	a, err := svc.db.ListAccounts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(a) != 1 {
+		t.Fatalf("duplikat: %d akun", len(a))
+	}
+	row := a[0]
+	if row.IMAPHost != "imap.gmail.com" || row.SMTPHost != "smtp.gmail.com" || row.Auth != "oauth2" {
+		t.Fatalf("konfigurasi tidak terperbarui: %+v", row)
+	}
+	if svc.keyring.(*fakeKeyring).secret["karta/"+row.Email] != "pw2" {
+		t.Fatalf("keyring tidak terperbarui")
+	}
+}

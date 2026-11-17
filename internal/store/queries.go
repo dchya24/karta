@@ -68,6 +68,23 @@ func (db *DB) AddAccount(email, imapHost string, imapPort int, imapTLS bool, smt
 	return res.LastInsertId()
 }
 
+// UpdateAccount memperbarui konfigurasi koneksi akun berdasar email.
+func (db *DB) UpdateAccount(email, imapHost string, imapPort int, imapTLS bool, smtpHost string, smtpPort int, smtpTLS bool, auth string) error {
+	if auth == "" {
+		auth = "password"
+	}
+	res, err := db.Exec(`UPDATE accounts SET imap_host=?, imap_port=?, imap_tls=?,
+		smtp_host=?, smtp_port=?, smtp_tls=?, auth=? WHERE email=?`,
+		imapHost, imapPort, boolInt(imapTLS), smtpHost, smtpPort, boolInt(smtpTLS), auth, email)
+	if err != nil {
+		return fmt.Errorf("perbarui akun %s: %w", email, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("perbarui akun %s: tidak ditemukan", email)
+	}
+	return nil
+}
+
 // ListAccounts mengembalikan semua akun terurut email.
 func (db *DB) ListAccounts() ([]Account, error) {
 	rows, err := db.Query(`SELECT id, email, imap_host, imap_port, imap_tls,

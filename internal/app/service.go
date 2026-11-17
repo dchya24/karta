@@ -72,6 +72,7 @@ func (s *Service) Close() error { return s.db.Close() }
 
 // AddAccount menyimpan akun baru: metadata ke SQLite, password ke keyring.
 // Sinkronisasi awal berjalan di Refresh (dipanggil worker / setelah tambah).
+// Upsert: bila email sudah terdaftar, konfigurasi & kredensial diperbarui.
 func (s *Service) AddAccount(ctx context.Context, cfg AccountConfig) (int, error) {
 	if cfg.Email == "" || cfg.IMAPHost == "" || cfg.SMTPHost == "" {
 		return 0, fmt.Errorf("konfigurasi akun tidak lengkap")
@@ -80,32 +81,45 @@ func (s *Service) AddAccount(ctx context.Context, cfg AccountConfig) (int, error
 	if auth == "" {
 		auth = "password"
 	}
-	id, err := s.db.AddAccount(cfg.Email, cfg.IMAPHost, cfg.IMAPPort, cfg.IMAPTLS,
-		cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPTLS, auth)
+	var (
+		id  int64
+		err error
+	)
+	accs, lerr := s.db.ListAccounts()
+	if lerr != nil {
+		return 0, lerr
+	}
+	existing := -1
+	for _, a := range accs {
+		if a.Email == cfg.Email {
+			existing = a.ID
+			break
+		}
+	}
+	if existing >= 0 {
+		err = s.db.UpdateAccount(cfg.Email, cfg.IMAPHost, cfg.IMAPPort, cfg.IMAPTLS,
+			cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPTLS, auth)
+		id = int64(existing)
+	} else {
+		id, err = s.db.AddAccount(cfg.Email, cfg.IMAPHost, cfg.IMAPPort, cfg.IMAPTLS,
+			cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPTLS, auth)
+	}
 	if err != nil {
 		return 0, err
 	}
 	if err := s.keyring.Set(keyringService, cfg.Email, cfg.Password); err != nil {
 		// Gagal keyring: jangan tinggalkan akun tanpa kredensial.
-		_ = s.RemoveAccount(ctx, int(id))
+		if existing < 0 {
+			_ = s.RemoveAccount(ctx, int(id))
+		}
 		return 0, fmt.Errorf("simpan kredensial ke keyring: %w", err)
 	}
 	return int(id), nil
 }
 
-// EnsureGmailAccount membuat akun Gmail (OAuth2) bila belum ada; kalau
-// email sudah terdaftar (mis. dari percobaan login sebelumnya), pakai
-// akun yang ada — token sudah tersimpan di keyring oleh flow login.
+// EnsureGmailAccount menyimpan akun Gmail (OAuth2) dari hasil login;
+// AddAccount upsert, jadi email yang sudah terdaftar cukup diperbarui.
 func (s *Service) EnsureGmailAccount(email string) (int, error) {
-	accs, err := s.db.ListAccounts()
-	if err != nil {
-		return 0, err
-	}
-	for _, a := range accs {
-		if a.Email == email {
-			return a.ID, nil
-		}
-	}
 	return s.AddAccount(context.Background(), AccountConfig{
 		Email: email, IMAPHost: "imap.gmail.com", IMAPPort: 993, IMAPTLS: true,
 		SMTPHost: "smtp.gmail.com", SMTPPort: 465, SMTPTLS: true,
