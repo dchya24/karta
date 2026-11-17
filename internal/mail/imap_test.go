@@ -43,10 +43,10 @@ func TestMailboxRoleByName(t *testing.T) {
 func TestHeaderFromFetch(t *testing.T) {
 	date := time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC)
 	m := &imapclient.FetchMessageBuffer{
-		UID: 42,
-		Flags: []imap.Flag{imap.FlagHasAttachment}, // tanpa \Seen → belum dibaca
+		UID:          42,
+		Flags:        []imap.Flag{imap.FlagHasAttachment}, // tanpa \Seen → belum dibaca
 		InternalDate: date,
-		RFC822Size: 1234,
+		RFC822Size:   1234,
 		Envelope: &imap.Envelope{
 			MessageID: "<1@x>",
 			Subject:   "Uji",

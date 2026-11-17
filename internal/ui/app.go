@@ -7,11 +7,13 @@ package ui
 import (
 	"context"
 	"log"
+	"os"
 	"strconv"
 	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/richtext"
 
 	"karta/internal/app"
 	"karta/internal/sync"
@@ -20,16 +22,16 @@ import (
 // state adalah kondisi UI: dibaca dan diubah hanya di main thread (view dan
 // callback window), diperbarui dari goroutine lewat Window.Update.
 type state struct {
-	svc      *app.Service
-	win      *mygo.Window
-	folders  []app.Folder
-	account  int    // akun terpilih (0 = pertama)
-	folder   int    // folder terpilih (ID)
+	svc       *app.Service
+	win       *mygo.Window
+	folders   []app.Folder
+	account   int    // akun terpilih (0 = pertama)
+	folder    int    // folder terpilih (ID)
 	folderSel string // pilihan sidebar (indeks folder sebagai string)
-	query    string
-	list     ui.ListState
-	msgs     []app.MessageHeader
-	selected int
+	query     string
+	list      ui.ListState
+	msgs      []app.MessageHeader
+	selected  int
 
 	// form tambah akun
 	showAccount bool
@@ -45,8 +47,12 @@ type state struct {
 	fetching map[int]bool
 
 	// composer
-	composerOpen bool
-	composerMode string // new | reply | forward
+	composerOpen              bool
+	composerMode              string // new | reply | forward
+	dTo, dCc, dSubject, dBody string
+	dDoc                      *richtext.Document
+	dFiles                    []string
+	dStatus                   string
 }
 
 // Run membuka window utama, memulai worker sinkronisasi, dan menjalankan
@@ -57,8 +63,8 @@ func Run(svc *app.Service) error {
 	defer cancelSync()
 	mygo.App.WhenReady(func() {
 		st.win = mygo.NewWindow(mygo.WindowOptions{
-			Title:    "Karta",
-			Width:    1100, Height: 720,
+			Title: "Karta",
+			Width: 1100, Height: 720,
 			MinWidth: 760, MinHeight: 480,
 			StateKey: "karta",
 			Content:  ui.View(st.view),
@@ -334,12 +340,22 @@ func (s *state) readingPane(c *ui.Context) {
 	} else {
 		ui.Textf(c, "%s", m.PlainText)
 	}
-	if len(m.Attachments) > 0 {
-		ui.Divider(c)
-		for _, a := range m.Attachments {
-			ui.Textf(c, "📎 %s (%s)", a.Filename, a.ContentType).TextColor(t.TextMuted).FontSize(12)
+	// Aksi lampiran + fallback HTML (PRD §3.3).
+	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+		if len(m.Attachments) > 0 {
+			ui.Text(c, "Lampiran:").TextColor(t.TextMuted).FontSize(12)
+			for _, a := range m.Attachments {
+				if ui.Button(c, a.Filename).Label("Simpan " + a.Filename).Clicked() {
+					s.saveAttachment(m.ID, a.Filename)
+				}
+			}
 		}
-	}
+		if m.RawHTML != "" {
+			if ui.Button(c, "Buka di Browser").Clicked() {
+				s.openInBrowser(m.ID)
+			}
+		}
+	})
 }
 
 // shortcuts memasang navigasi keyboard PRD §3.5.
@@ -374,4 +390,48 @@ func shortDate(iso string) string {
 		return iso[11:16]
 	}
 	return iso
+}
+
+// saveAttachment menanyakan lokasi simpan (dialog native) lalu menulis
+// isi lampiran ke disk di goroutine.
+func (s *state) saveAttachment(messageID int, filename string) {
+	path, err := mygo.Dialog.Save(mygo.SaveDialogOptions{
+		Title:       "Simpan lampiran",
+		DefaultPath: filename,
+		ButtonLabel: "Simpan",
+	})
+	if err != nil || path == "" {
+		return
+	}
+	win := s.win
+	go func() {
+		data, _, err := s.svc.AttachmentData(messageID, filename)
+		if err == nil {
+			err = os.WriteFile(path, data, 0o600)
+		}
+		win.Update(func() {
+			if err != nil {
+				log.Printf("ui: simpan lampiran: %v", err)
+			}
+		})
+	}()
+}
+
+// openInBrowser menyimpan HTML mentah ke file sementara (goroutine) lalu
+// membukanya di browser default OS — jangan blokir main thread.
+func (s *state) openInBrowser(messageID int) {
+	win := s.win
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		path, err := s.svc.SaveHTMLForBrowser(ctx, messageID)
+		if err == nil {
+			err = mygo.Shell.OpenPath(path)
+		}
+		win.Update(func() {
+			if err != nil {
+				log.Printf("ui: buka di browser: %v", err)
+			}
+		})
+	}()
 }

@@ -53,12 +53,22 @@ type Message struct {
 // AccountConfig adalah data konfigurasi akun baru. Password dikirim ke
 // keyring dan tidak pernah disimpan di database maupun file.
 type AccountConfig struct {
-	Email       string `json:"email"`
-	Password    string `json:"-"` // tidak pernah ikut serialisasi
-	IMAPHost    string `json:"imapHost"`
-	IMAPPort    int    `json:"imapPort"`
-	IMAPTLS     bool   `json:"imapTls"`
-	SMTPHost    string `json:"smtpHost"`
-	SMTPPort    int    `json:"smtpPort"`
-	SMTPTLS     bool   `json:"smtpTls"`
+	Email    string `json:"email"`
+	Password string `json:"-"` // tidak pernah ikut serialisasi
+	IMAPHost string `json:"imapHost"`
+	IMAPPort int    `json:"imapPort"`
+	IMAPTLS  bool   `json:"imapTls"`
+	SMTPHost string `json:"smtpHost"`
+	SMTPPort int    `json:"smtpPort"`
+	SMTPTLS  bool   `json:"smtpTls"`
+}
+
+// Draft adalah pesan yang sedang disusun: Compose baru, Reply, atau
+// Forward. Attachments berisi path file lokal yang dilampirkan.
+type Draft struct {
+	To          string   `json:"to"`
+	Cc          string   `json:"cc"`
+	Subject     string   `json:"subject"`
+	Body        string   `json:"body"`
+	Attachments []string `json:"attachments"`
 }

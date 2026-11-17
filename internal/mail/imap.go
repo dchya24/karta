@@ -3,7 +3,7 @@ package mail
 import (
 	"context"
 	"fmt"
-"strings"
+	"strings"
 	"time"
 
 	"github.com/emersion/go-imap/v2"

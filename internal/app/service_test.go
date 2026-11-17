@@ -140,7 +140,7 @@ func TestMessageFlow(t *testing.T) {
 }
 
 // stubIMAP mensimulasikan server IMAP untuk test Refresh tanpa jaringan.
-type stubIMAP struct{
+type stubIMAP struct {
 	boxes []mail.MailboxInfo
 	inbox []mail.HeaderInfo
 }
