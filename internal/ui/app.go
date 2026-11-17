@@ -50,6 +50,11 @@ type state struct {
 	// pesan yang body-nya sedang diambil lazy (ID → berlangsung)
 	fetching map[int]bool
 
+	// sinkronisasi manual
+	syncBusy bool
+	syncMsg  string
+	syncFail bool
+
 	// composer
 	composerOpen              bool
 	composerMode              string // new | reply | forward
@@ -105,14 +110,26 @@ func (s *state) startSync(ctx context.Context) {
 	}).Run(ctx)
 }
 
-// refreshNow menjalankan sinkronisasi segera di goroutine.
+// refreshNow menjalankan sinkronisasi segera di goroutine, dengan
+// guard anti dobel-klik dan laporan status/error di sidebar.
 func (s *state) refreshNow() {
+	if s.syncBusy {
+		return
+	}
+	s.syncBusy = true
 	win := s.win
 	go func() {
-		if err := s.svc.Refresh(context.Background()); err != nil {
-			log.Printf("ui: refresh: %v", err)
-		}
-		win.Update(func() { s.reloadFolders() })
+		err := s.svc.Refresh(context.Background())
+		win.Update(func() {
+			s.syncBusy = false
+			s.reloadFolders()
+			if err != nil {
+				s.syncMsg, s.syncFail = err.Error(), true
+				log.Printf("ui: refresh: %v", err)
+				return
+			}
+			s.syncMsg, s.syncFail = "Sinkron " + time.Now().Format("15:04:05"), false
+		})
 	}()
 }
 
@@ -250,8 +267,20 @@ func (s *state) view(c *ui.Context) {
 			} else {
 				ui.Text(c, "Belum ada akun.\nTekan + untuk menambah.").TextColor(t.TextMuted).Padding(16)
 			}
-			if ui.Button(c, "Sinkronkan").Label("Sinkronkan sekarang").MarginX(2).Clicked() {
+			syncLabel := "Sinkronkan"
+			if s.syncBusy {
+				syncLabel = "Menyinkron…"
+			}
+			if ui.Button(c, syncLabel).Label("Sinkronkan sekarang").Clicked() {
 				s.refreshNow()
+			}
+			if s.syncMsg != "" {
+				msg := ui.Textf(c, "%s", s.syncMsg).FontSize(11)
+				if s.syncFail {
+					msg.TextColor(t.Danger)
+				} else {
+					msg.TextColor(t.TextMuted)
+				}
 			}
 		})
 
