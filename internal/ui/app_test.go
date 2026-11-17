@@ -65,29 +65,29 @@ func TestViewBuilds(t *testing.T) {
 	}
 }
 
-// TestAccountFormGoogle memastikan form tipe akun Google menyembunyikan
-// field password/host dan menampilkan hint client ID.
+// TestAccountFormGoogle memastikan tombol Login via Google tampil, error
+// tanpa email muncul inline, dan semua field manual tetap ada.
 func TestAccountFormGoogle(t *testing.T) {
 	st := &state{svc: testService(t)}
-	st.showAccount, st.fType = true, 0 // Google (OAuth2)
+	st.showAccount = true
 	tt := ui.NewTester(st.view, 1100, 720)
-	if tt.HasText("Password") {
-		t.Fatal("form Google masih menampilkan field password")
+	if !tt.HasText("Login via Google") {
+		t.Fatal("tombol Login via Google tidak tampil")
 	}
-	if !tt.HasText("~/.config/karta/oauth.json") {
-		t.Fatal("hint client_id tidak tampil")
+	if !tt.HasText("IMAP host") {
+		t.Fatal("field IMAP host tidak tampil")
+	}
+	// Klik Google tanpa email → pesan inline.
+	st.loginGoogle()
+	tt.Frame()
+	if !tt.HasText("Isi email dulu") {
+		t.Fatal("pesan minta email tidak tampil")
 	}
 	// Status OAuth inline.
 	st.oauthMsg, st.oauthFail = "Menunggu authorize di browser…", false
 	tt.Frame()
 	if !tt.HasText("Menunggu authorize di browser") {
 		t.Fatal("status OAuth tidak tampil")
-	}
-	// Beralih ke tipe password: field IMAP/SMTP muncul kembali.
-	st.fType = 1
-	tt.Frame()
-	if !tt.HasText("IMAP host") {
-		t.Fatal("field IMAP host tidak tampil untuk tipe password")
 	}
 }
 // TestViewSearch memastikan query pencarian memfilter daftar (FTS5).

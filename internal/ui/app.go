@@ -36,8 +36,8 @@ type state struct {
 
 	// form tambah akun
 	showAccount bool
-	fType       int    // 0 = Google (OAuth2), 1 = lainnya (password)
 	oauthBusy   bool   // flow OAuth sedang berjalan
+	oauthLogin  bool   // tombol Login via Google yang memicu simpan
 	oauthMsg    string // status/error OAuth tampil inline di form
 	oauthFail   bool   // oauthMsg = error (tampilkan merah)
 	fEmail      string
@@ -171,7 +171,7 @@ func (s *state) saveAccount() {
 		smtpPort = 465
 	}
 	method := app.AuthPassword
-	if s.fType == 0 {
+	if s.oauthLogin { // tersimpan saat tombol Login via Google ditekan
 		method = app.AuthOAuth2
 	}
 	id, err := s.svc.AddAccount(context.Background(), app.AccountConfig{
@@ -185,7 +185,7 @@ func (s *state) saveAccount() {
 		return
 	}
 	s.account = id
-	if s.fType != 0 {
+	if !s.oauthLogin {
 		s.showAccount = false
 		s.reloadFolders()
 		s.refreshNow() // sinkron pertama langsung
@@ -205,6 +205,7 @@ func (s *state) saveAccount() {
 					log.Printf("ui: oauth: %v", err)
 					return
 				}
+				s.oauthLogin = false
 				s.showAccount = false
 				s.reloadFolders()
 				s.refreshNow()
@@ -314,43 +315,30 @@ func (s *state) view(c *ui.Context) {
 	})
 }
 
-// accountForm menggambar form tambah akun. Pilih tipe akun dulu: Google
-// (OAuth2, host Gmail auto-fill) atau lainnya (IMAP/SMTP password).
+// accountForm menggambar form tambah akun: input manual + tombol simpan,
+// plus tombol Login via Google yang langsung memicu flow OAuth.
 func (s *state) accountForm(c *ui.Context) {
 	t := c.Theme()
 	ui.Text(c, "Tambah Akun").Bold().FontSize(18)
-	if ui.Segmented(c, &s.fType, "Google (OAuth2)", "Lainnya (password)").
-		Label("Tipe akun").Width(360).Changed() && s.fType == 0 {
-		// Google: host Gmail sudah pasti — prefill.
-		s.fIMAPHost, s.fIMAPPort = "imap.gmail.com", "993"
-		s.fSMTPHost, s.fSMTPPort = "smtp.gmail.com", "465"
-		s.fIMAPTLS = true
-	}
 	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "Email").Width(120)
 		ui.TextInputBase(c, &s.fEmail).Grow(1).Placeholder("nama@contoh.id").Label("Email")
 	})
-	if s.fType != 0 {
-		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "Password").Width(120)
-			ui.TextInputBase(c, &s.fPass).Grow(1).Password().Placeholder("App password").Label("Password")
-		})
-		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "IMAP host").Width(120)
-			ui.TextInputBase(c, &s.fIMAPHost).Grow(1).Placeholder("imap.contoh.id").Label("IMAP host")
-			ui.TextInputBase(c, &s.fIMAPPort).Width(80).Placeholder("993").Label("IMAP port")
-		})
-		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "SMTP host").Width(120)
-			ui.TextInputBase(c, &s.fSMTPHost).Grow(1).Placeholder("smtp.contoh.id").Label("SMTP host")
-			ui.TextInputBase(c, &s.fSMTPPort).Width(80).Placeholder("465").Label("SMTP port")
-		})
-		ui.Checkbox(c, &s.fIMAPTLS, "Gunakan TLS untuk IMAP")
-	} else {
-		ui.Text(c, "Login dibuka di browser sistem. Host Gmail diisi otomatis."+
-			"\nKlien ID Google: env KARTA_OAUTH_CLIENT_ID atau ~/.config/karta/oauth.json").
-			TextColor(t.TextMuted).FontSize(12)
-	}
+	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "Password").Width(120)
+		ui.TextInputBase(c, &s.fPass).Grow(1).Password().Placeholder("App password").Label("Password")
+	})
+	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "IMAP host").Width(120)
+		ui.TextInputBase(c, &s.fIMAPHost).Grow(1).Placeholder("imap.contoh.id").Label("IMAP host")
+		ui.TextInputBase(c, &s.fIMAPPort).Width(80).Placeholder("993").Label("IMAP port")
+	})
+	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "SMTP host").Width(120)
+		ui.TextInputBase(c, &s.fSMTPHost).Grow(1).Placeholder("smtp.contoh.id").Label("SMTP host")
+		ui.TextInputBase(c, &s.fSMTPPort).Width(80).Placeholder("465").Label("SMTP port")
+	})
+	ui.Checkbox(c, &s.fIMAPTLS, "Gunakan TLS untuk IMAP")
 	if s.oauthMsg != "" {
 		msg := ui.Textf(c, "%s", s.oauthMsg).FontSize(12)
 		if s.oauthFail {
@@ -361,12 +349,33 @@ func (s *state) accountForm(c *ui.Context) {
 	}
 	ui.Row(c).Gap(12).Children(func() {
 		if ui.Button(c, s.saveLabel()).Clicked() && !s.oauthBusy {
+			s.oauthLogin = false
 			s.saveAccount()
+		}
+		if ui.Button(c, "Login via Google").Label("Login via Google (OAuth2)").Clicked() && !s.oauthBusy {
+			s.loginGoogle()
 		}
 		if ui.Button(c, "Batal").Clicked() {
 			s.showAccount = false
 		}
 	})
+	ui.Text(c, "Login via Google: host Gmail diisi otomatis; klien ID dari"+
+		" env KARTA_OAUTH_CLIENT_ID atau ~/.config/karta/oauth.json").
+		TextColor(t.TextMuted).FontSize(12)
+}
+
+// loginGoogle menyiapkan akun Gmail lalu memicu flow OAuth — cukup satu
+// klik: butuh email terisi di form.
+func (s *state) loginGoogle() {
+	if s.fEmail == "" {
+		s.oauthMsg, s.oauthFail = "Isi email dulu, lalu klik Login via Google.", true
+		return
+	}
+	s.oauthLogin = true
+	s.fIMAPHost, s.fIMAPPort = "imap.gmail.com", "993"
+	s.fSMTPHost, s.fSMTPPort = "smtp.gmail.com", "465"
+	s.fIMAPTLS = true
+	s.saveAccount()
 }
 
 // row menggambar satu baris daftar pesan.
