@@ -127,12 +127,15 @@ func (s *Service) OAuthWaitCallback(ctx context.Context, port int, state string)
 
 // OAuthExchange menukar code dengan token (PKCE verifier), membaca email
 // akun dari id_token, dan menyimpan token ke keyring di bawah email itu.
-func (s *Service) OAuthExchange(ctx context.Context, clientID, secret, code, verifier string) (string, error) {
+// redirectURI wajib sama dengan yang dipakai di authorize (Google menolak
+// exchange tanpa parameter redirect_uri).
+func (s *Service) OAuthExchange(ctx context.Context, clientID, secret, redirectURI, code, verifier string) (string, error) {
 	conf := &oauth2.Config{
 		ClientID:     clientID,
 		ClientSecret: secret,
 		Endpoint:     google.Endpoint,
 		Scopes:       oauthScopes,
+		RedirectURL:  redirectURI,
 	}
 	tok, err := conf.Exchange(ctx, code,
 		oauth2.SetAuthURLParam("code_verifier", verifier))
@@ -233,7 +236,8 @@ func (s *Service) StartOAuthLogin(ctx context.Context, onDone func(email string,
 		var email string
 		code, err := s.OAuthWaitCallback(ctx, port, state)
 		if err == nil {
-			email, err = s.OAuthExchange(ctx, clientID, secret, code, verifier)
+			redirect := fmt.Sprintf("http://127.0.0.1:%d", port)
+			email, err = s.OAuthExchange(ctx, clientID, secret, redirect, code, verifier)
 		}
 		if onDone != nil {
 			onDone(email, err)
