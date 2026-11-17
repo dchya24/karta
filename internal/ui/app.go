@@ -269,13 +269,13 @@ func (s *state) view(c *ui.Context) {
 			}
 			syncLabel := "Sinkronkan"
 			if s.syncBusy {
-				syncLabel = "Menyinkron…"
+				syncLabel = "Menyinkronkan…"
 			}
-			if ui.Button(c, syncLabel).Label("Sinkronkan sekarang").Clicked() {
+			if ui.Button(c, syncLabel).Label("Sinkronkan sekarang").MarginX(10).Clicked() {
 				s.refreshNow()
 			}
 			if s.syncMsg != "" {
-				msg := ui.Textf(c, "%s", s.syncMsg).FontSize(11)
+				msg := ui.Textf(c, "%s", s.syncMsg).FontSize(11).PaddingX(10)
 				if s.syncFail {
 					msg.TextColor(t.Danger)
 				} else {
