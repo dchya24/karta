@@ -1,14 +1,20 @@
 package app
 
 import (
+	"context"
 	"encoding/base64"
+	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/emersion/go-sasl"
 	"golang.org/x/oauth2"
 	"karta/internal/mail"
+	"karta/internal/store"
 )
 
 // fakeGmailSMTP menerima AUTH XOAUTH2 dan memverifikasi tokennya.
@@ -151,5 +157,70 @@ func TestEmailFromIDToken(t *testing.T) {
 	}
 	if _, err := emailFromIDToken(makeTok(`{"sub":"123"}`)); err == nil {
 		t.Fatal("id_token tanpa email harus error")
+	}
+}
+
+// TestOAuthWaitCallback menguji server callback loopback tanpa GUI:
+// redirect pertama memberi code, redirect ulang tetap dapat halaman sukses.
+func TestOAuthWaitCallback(t *testing.T) {
+	db, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	svc := New(db)
+	defer svc.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	port, err := fixedOrFreePort(8699)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := "teststate123"
+	type result struct {
+		code string
+		err  error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		code, err := svc.OAuthWaitCallback(ctx, port, state)
+		ch <- result{code, err}
+	}()
+	// Tunggu server hidup.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/?state=beda", port))
+		if err == nil {
+			resp.Body.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("server callback tidak hidup dalam 5 detik")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	// Redirect pertama: code diterima.
+	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/?state=%s&code=abc123", port, state))
+	if err != nil {
+		t.Fatalf("redirect pertama: %v", err)
+	}
+	resp.Body.Close()
+	r := <-ch
+	if r.err != nil {
+		t.Fatalf("OAuthWaitCallback: %v", r.err)
+	}
+	if r.code != "abc123" {
+		t.Fatalf("code=%q", r.code)
+	}
+	// Redirect ulang: halaman sukses, bukan connection refused.
+	resp, err = http.Get(fmt.Sprintf("http://127.0.0.1:%d/?state=%s&code=dup", port, state))
+	if err != nil {
+		t.Fatalf("redirect ulang: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(body), "Login berhasil") {
+		t.Fatalf("halaman sukses tidak tampil: %s", body)
 	}
 }

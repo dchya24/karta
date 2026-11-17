@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -93,8 +94,14 @@ func (s *Service) OAuthWaitCallback(ctx context.Context, port int, state string)
 		success(w) // idempotent: redirect ulang tetap dapat halaman sukses
 	})
 	errCh := make(chan error, 1)
+	l, err := net.Listen("tcp", srv.Addr)
+	if err != nil {
+		return "", fmt.Errorf("bind %s: %w", srv.Addr, err)
+	}
+	log.Printf("oauth: server callback mendengarkan di http://%s", l.Addr())
 	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := srv.Serve(l); err != nil && err != http.ErrServerClosed {
+			log.Printf("oauth: server callback berhenti: %v", err)
 			errCh <- err
 		}
 	}()
