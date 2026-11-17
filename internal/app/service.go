@@ -93,6 +93,26 @@ func (s *Service) AddAccount(ctx context.Context, cfg AccountConfig) (int, error
 	return int(id), nil
 }
 
+// EnsureGmailAccount membuat akun Gmail (OAuth2) bila belum ada; kalau
+// email sudah terdaftar (mis. dari percobaan login sebelumnya), pakai
+// akun yang ada — token sudah tersimpan di keyring oleh flow login.
+func (s *Service) EnsureGmailAccount(email string) (int, error) {
+	accs, err := s.db.ListAccounts()
+	if err != nil {
+		return 0, err
+	}
+	for _, a := range accs {
+		if a.Email == email {
+			return a.ID, nil
+		}
+	}
+	return s.AddAccount(context.Background(), AccountConfig{
+		Email: email, IMAPHost: "imap.gmail.com", IMAPPort: 993, IMAPTLS: true,
+		SMTPHost: "smtp.gmail.com", SMTPPort: 465, SMTPTLS: true,
+		Auth: AuthOAuth2,
+	})
+}
+
 // RemoveAccount menghapus akun beserta kredensial keyring-nya.
 func (s *Service) RemoveAccount(_ context.Context, id int) error {
 	accs, err := s.db.ListAccounts()

@@ -345,11 +345,7 @@ func (s *state) loginGoogle() {
 					log.Printf("ui: oauth: %v", err)
 					return
 				}
-				id, aerr := s.svc.AddAccount(context.Background(), app.AccountConfig{
-					Email: email, IMAPHost: "imap.gmail.com", IMAPPort: 993, IMAPTLS: true,
-					SMTPHost: "smtp.gmail.com", SMTPPort: 465, SMTPTLS: true,
-					Auth: app.AuthOAuth2,
-				})
+				id, aerr := s.svc.EnsureGmailAccount(email)
 				if aerr != nil {
 					s.oauthMsg, s.oauthFail = aerr.Error(), true
 					log.Printf("ui: oauth add akun: %v", aerr)
