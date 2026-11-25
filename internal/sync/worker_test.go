@@ -59,3 +59,52 @@ func TestWorkerContextError(t *testing.T) {
 		t.Fatal("worker tidak berhenti")
 	}
 }
+
+type fakeWatcher struct {
+	fakeRefresher
+	push chan struct{}
+}
+
+func (f *fakeWatcher) Watch(ctx context.Context, onEvent func()) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-f.push:
+			onEvent()
+		}
+	}
+}
+
+// TestWorkerIdleTrigger memastikan push IDLE langsung memicu siklus Refresh
+// tanpa menunggu interval polling (diuji di bawah -race).
+func TestWorkerIdleTrigger(t *testing.T) {
+	f := &fakeWatcher{push: make(chan struct{}, 1)}
+	var updates atomic.Int64
+	w := NewWorker(f, time.Hour, func() { updates.Add(1) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { w.Run(ctx); close(done) }()
+
+	// Tunggu siklus awal.
+	deadline := time.Now().Add(time.Second)
+	for f.calls.Load() < 1 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	// Dorong event IDLE.
+	f.push <- struct{}{}
+	deadline = time.Now().Add(time.Second)
+	for f.calls.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("worker IDLE tidak berhenti setelah cancel")
+	}
+	if f.calls.Load() < 2 || updates.Load() < 2 {
+		t.Fatalf("IDLE gagal memicu refresh: calls=%d updates=%d", f.calls.Load(), updates.Load())
+	}
+}

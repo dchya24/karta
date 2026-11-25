@@ -386,3 +386,35 @@ func TestMessageActionsAndCc(t *testing.T) {
 		t.Fatalf("Trash harus kosong: %+v", tMsgs)
 	}
 }
+
+func TestWatchIdleAndReconnect(t *testing.T) {
+	svc := newTestService(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if _, err := svc.AddAccount(ctx, AccountConfig{
+		Email: "aku@contoh.id", Password: "pw",
+		IMAPHost: "imap.contoh.id", IMAPPort: 993, IMAPTLS: true,
+		SMTPHost: "smtp.contoh.id", SMTPPort: 465, SMTPTLS: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	oldIdle, oldDelay := imapIdle, idleBaseDelay
+	idleBaseDelay = 5 * time.Millisecond
+	defer func() { imapIdle, idleBaseDelay = oldIdle, oldDelay }()
+
+	attempts := 0
+	events := 0
+	imapIdle = func(c context.Context, cfg mail.IMAPConfig, box string, onEvent func()) error {
+		attempts++
+		if attempts == 1 {
+			return &mail.TransientError{Op: "idle", Err: context.DeadlineExceeded}
+		}
+		onEvent()
+		cancel()
+		return c.Err()
+	}
+	svc.Watch(ctx, func() { events++ })
+	if attempts != 2 || events != 1 {
+		t.Fatalf("attempts=%d events=%d, mau 2 dan 1", attempts, events)
+	}
+}

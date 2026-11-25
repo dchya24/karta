@@ -50,10 +50,10 @@ type state struct {
 	selected  int
 
 	// cache dokumen reading pane (richtext read-only dengan tautan klik)
-	readerID   int
-	readerText string
-	readerDoc  *richtext.Document
-	actionMsg  string
+	readerID      int
+	readerText    string
+	readerDoc     *richtext.Document
+	pendingToasts []ui.Toast
 
 	// form tambah akun
 	showAccount bool
@@ -235,10 +235,12 @@ func (s *state) saveAccount() {
 	})
 	if err != nil {
 		log.Printf("ui: tambah akun: %v", err)
+		s.notify("Gagal simpan akun: "+err.Error(), "error")
 		return
 	}
 	s.account = id
 	s.showAccount = false
+	s.notify("Akun ditambahkan", "success")
 	s.reloadFolders()
 	s.refreshNow() // sinkron pertama langsung
 }
@@ -293,9 +295,11 @@ func (s *state) deleteAccount(acc app.Account) {
 	}
 	if err := s.svc.RemoveAccount(context.Background(), acc.ID); err != nil {
 		log.Printf("ui: hapus akun %s: %v", acc.Email, err)
+		s.notify("Gagal hapus akun: "+err.Error(), "error")
 		return
 	}
 	s.account, s.folder, s.folderSel = 0, 0, ""
+	s.notify("Akun dihapus", "info")
 	s.reloadFolders()
 }
 
@@ -309,11 +313,23 @@ func (s *state) fetchBodyLazy(id int) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		if _, err := s.svc.GetMessage(ctx, id); err != nil {
-			log.Printf("ui: fetch body pesan %d: %v", id, err)
-		}
-		win.Update(func() { delete(s.fetching, id) })
+		_, err := s.svc.GetMessage(ctx, id)
+		win.Update(func() {
+			delete(s.fetching, id)
+			if err != nil {
+				log.Printf("ui: fetch body pesan %d: %v", id, err)
+				s.notify("Gagal ambil isi pesan: "+err.Error(), "error")
+			}
+		})
 	}()
+}
+
+// notify mengantrekan toast notifikasi untuk ditampilkan di frame berikutnya.
+func (s *state) notify(title, kind string) {
+	s.pendingToasts = append(s.pendingToasts, ui.Toast{
+		Title: title,
+		Type:  kind,
+	})
 }
 
 // view adalah builder UI native; berjalan tiap frame di main thread.
@@ -326,6 +342,10 @@ func (s *state) view(c *ui.Context) {
 		c.SetTheme(kartaTheme(c.Theme().Dark))
 	}
 	t := c.Theme()
+	for _, toast := range s.pendingToasts {
+		c.AddToast(toast)
+	}
+	s.pendingToasts = s.pendingToasts[:0]
 	s.shortcuts(c)
 
 	if s.composerOpen {
@@ -662,9 +682,6 @@ func (s *state) readingPane(c *ui.Context) {
 				s.openInBrowser(m.ID)
 			}
 		}
-		if s.actionMsg != "" {
-			ui.Textf(c, "%s", s.actionMsg).TextColor(t.Danger).FontSize(12)
-		}
 	})
 }
 
@@ -682,22 +699,28 @@ func (s *state) openLink(raw string) {
 		s.openMailto(raw)
 		return
 	}
+	win := s.win
 	go func() {
 		if err := mygo.Shell.OpenExternal(raw); err != nil {
 			log.Printf("ui: buka tautan %s: %v", raw, err)
+			if win != nil {
+				win.Update(func() { s.notify("Gagal buka tautan: "+err.Error(), "error") })
+			}
 		}
 	}()
 }
 
 // runAction menjalankan operasi pesan di goroutine lalu memperbarui UI di main
 // thread via Window.Update; pada mode uji headless (win == nil) berjalan langsung.
-func (s *state) runAction(op func(context.Context) error) {
-	s.actionMsg = ""
+func (s *state) runAction(okToast string, op func(context.Context) error) {
 	win := s.win
 	if win == nil {
 		if err := op(context.Background()); err != nil {
-			s.actionMsg = err.Error()
+			s.notify(err.Error(), "error")
 			return
+		}
+		if okToast != "" {
+			s.notify(okToast, "success")
 		}
 		s.reloadFolders()
 		return
@@ -708,9 +731,12 @@ func (s *state) runAction(op func(context.Context) error) {
 		err := op(ctx)
 		win.Update(func() {
 			if err != nil {
-				s.actionMsg = err.Error()
+				s.notify(err.Error(), "error")
 				log.Printf("ui: aksi pesan: %v", err)
 				return
+			}
+			if okToast != "" {
+				s.notify(okToast, "success")
 			}
 			s.reloadFolders()
 		})
@@ -718,19 +744,19 @@ func (s *state) runAction(op func(context.Context) error) {
 }
 
 func (s *state) toggleRead(id int, currentlyUnread bool) {
-	s.runAction(func(ctx context.Context) error {
+	s.runAction("", func(ctx context.Context) error {
 		return s.svc.MarkRead(ctx, id, currentlyUnread)
 	})
 }
 
 func (s *state) archiveMessage(id int) {
-	s.runAction(func(ctx context.Context) error {
+	s.runAction("Pesan diarsipkan", func(ctx context.Context) error {
 		return s.svc.Archive(ctx, id)
 	})
 }
 
 func (s *state) deleteMessage(id int) {
-	s.runAction(func(ctx context.Context) error {
+	s.runAction("Pesan dihapus", func(ctx context.Context) error {
 		return s.svc.Delete(ctx, id)
 	})
 }
@@ -847,7 +873,10 @@ func (s *state) saveAttachment(messageID int, filename string) {
 		win.Update(func() {
 			if err != nil {
 				log.Printf("ui: simpan lampiran: %v", err)
+				s.notify("Gagal simpan lampiran: "+err.Error(), "error")
+				return
 			}
+			s.notify("Lampiran tersimpan", "success")
 		})
 	}()
 }
@@ -866,6 +895,7 @@ func (s *state) openInBrowser(messageID int) {
 		win.Update(func() {
 			if err != nil {
 				log.Printf("ui: buka di browser: %v", err)
+				s.notify("Gagal buka di browser: "+err.Error(), "error")
 			}
 		})
 	}()

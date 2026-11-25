@@ -39,8 +39,7 @@ Note: `ui` juga bisa jalan di browser (WASM) — tidak relevan untuk Karta, abai
 
 ## 3. Strategi sync (keputusan)
 
-- **Polling berkala** untuk v0.1: interval default 5 menit per akun, tombol manual refresh, `context.Context` untuk cancel.
-- IMAP IDLE ditunda ke v0.2 (kompleksitas reconnection; polling cukup untuk MVP).
+- **Polling berkala + IMAP IDLE (v0.2):** koneksi IDLE per akun pada `INBOX` mendorong sinkronisasi instan saat ada `EXISTS`/`EXPUNGE` (auto-restart 28 menit dari go-imap, reconnect backoff eksponensial, fallback otomatis ke polling bila server tidak mendukung IDLE). Polling 5 menit tetap berjalan sebagai jaring pengaman folder lain.
 - Batching: fetch header batch (`UID SEARCH` + `FETCH` batch 500), body lazy — body di-fetch saat email dibuka pertama kali (disimpan cache SQLite).
 
 ## 4. Skema SQLite
@@ -157,7 +156,7 @@ collapse ≥2 newline kosong. Unit test wajib di AGENTS.md.
    - Window tak ter-map (KDE blok fokus): 2–6 MB.
    - Target PRD "< 35 MB" **tidak tercapai** dengan mygo v0.9.2 di Linux — pilihan: (a) laporkan/duplikasi ke upstream mygo, (b) revisi target menjadi "< 150 MB (Linux, GPU-rendered); 35 MB macOS", (c) evaluasi ulang bila upstream memperbaiki alokasi buffer.
    - Cold start (window siap): 104–137 ms warm, 1.7 s run pertama (init GPU/font). Target < 300 ms ✅.
-   - Search FTS5 10.000 email: 42 ms (2 token, prefix) — target < 50 ms ✅. Catatan: angka bergantung distribusi kosakata; re-bench dengan korpus email nyata sebelum rilis.
+   - Search FTS5 10.000 email (korpus realistis 8 topik, `BenchmarkSearch10kRealistic`): **3,6 ms** (kueri selektif 2 token, 100 hasil) dan **27,2 ms** (kueri topik 2 token, ~1.250 hasil) — keduanya jauh di bawah target < 50 ms ✅.
    - `go run` menambah proses toolchain ~39 MB sebagai parent — produksi/ukur memori wajib pakai binary tunggal (pandacode-run.sh sudah build-then-exec).
 2. go-imap v2 beta: pin `v2.0.0-beta.9`, duga API berubah di v0.2.
 3. `ui.Link` — verifikasi interaktifnya di window nyata saat scaffold pertama (riset statis cukup, uji runtime menyusul).

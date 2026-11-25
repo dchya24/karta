@@ -158,10 +158,14 @@ func TestReadingPaneHeadersReplyAllAndShortcuts(t *testing.T) {
 	st.closeComposer()
 	tt.Frame()
 
-	// E → Arsipkan pesan terpilih (2 → 1 di INBOX).
+	// E → Arsipkan pesan terpilih (2 → 1 di INBOX) + tampilkan toast status.
 	tt.Key(0, ui.KeyE)
+	tt.Frame()
 	if len(st.msgs) != 1 || st.msgs[0].Subject != "Salam pembuka" {
 		t.Fatalf("shortcut E gagal arsip: %+v", st.msgs)
+	}
+	if !tt.HasText("Pesan diarsipkan") {
+		t.Fatal("toast arsip tidak tampil")
 	}
 
 	// / → Fokus ke kolom pencarian.

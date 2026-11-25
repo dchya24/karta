@@ -1,6 +1,7 @@
 package mail
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -78,5 +79,13 @@ func TestHeaderFromFetch(t *testing.T) {
 	}
 	if h.Size != 1234 {
 		t.Fatalf("size %d", h.Size)
+	}
+}
+
+func TestIdleMailboxCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := IdleMailbox(ctx, IMAPConfig{Host: "127.0.0.1", Port: 1}, "INBOX", nil); err != context.Canceled {
+		t.Fatalf("err=%v, mau context.Canceled", err)
 	}
 }

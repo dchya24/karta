@@ -53,13 +53,23 @@ type Client struct {
 
 // DialIMAP membuka koneksi TLS (atau StartTLS bila cfg.TLS false) dan login.
 func DialIMAP(cfg IMAPConfig) (*Client, error) {
+	return DialIMAPWithHandler(cfg, nil)
+}
+
+// DialIMAPWithHandler membuka koneksi IMAP dengan handler data unilateral
+// (dipakai oleh IMAP IDLE untuk menerima notifikasi EXISTS/EXPUNGE).
+func DialIMAPWithHandler(cfg IMAPConfig, handler *imapclient.UnilateralDataHandler) (*Client, error) {
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
+	var opts *imapclient.Options
+	if handler != nil {
+		opts = &imapclient.Options{UnilateralDataHandler: handler}
+	}
 	var c *imapclient.Client
 	var err error
 	if cfg.TLS {
-		c, err = imapclient.DialTLS(addr, nil)
+		c, err = imapclient.DialTLS(addr, opts)
 	} else {
-		c, err = imapclient.DialStartTLS(addr, nil)
+		c, err = imapclient.DialStartTLS(addr, opts)
 	}
 	if err != nil {
 		return nil, &TransientError{Op: fmt.Sprintf("koneksi IMAP %s", addr), Err: err}
