@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,17 +20,153 @@ jobs:
 
       - name: Build binaries (CGO_ENABLED=0)
         run: |
+          VER="${GITHUB_REF_NAME#v}"
           mkdir -p dist
-          for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
-            os=${t%/*}
-            arch=${t#*/}
-            ext=""
-            [ "$os" = windows ] && ext=.exe
-            GOOS=$os GOARCH=$arch CGO_ENABLED=0 \
-              go build -trimpath -ldflags "-s -w" \
-              -o "dist/karta-$os-$arch$ext" ./cmd/karta
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
+            go build -trimpath -ldflags "-s -w" -o dist/karta-linux-amd64 ./cmd/karta
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
+            go build -trimpath -ldflags "-s -w" -o dist/karta-linux-arm64 ./cmd/karta
+          cp dist/karta-linux-amd64 dist/karta
+          tar -czf "dist/karta-linux-amd64-${VER}.tar.gz" dist/karta
+          cp dist/karta-linux-arm64 dist/karta
+          tar -czf "dist/karta-linux-arm64-${VER}.tar.gz" dist/karta
+          rm dist/karta
+
+      - name: Build .deb
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          for arch in amd64 arm64; do
+            bin=dist/karta-linux-$arch
+            pkg=dist/deb-$arch
+            mkdir -p $pkg/DEBIAN $pkg/usr/bin \
+              $pkg/usr/share/applications \
+              $pkg/usr/share/icons/hicolor/512x512/apps
+            cp $bin $pkg/usr/bin/karta
+            cp packaging/karta.desktop $pkg/usr/share/applications/
+            cp assets/icons/karta_512.png $pkg/usr/share/icons/hicolor/512x512/apps/karta.png
+            size=$(du -sk $pkg/usr | cut -f1)
+            {
+              echo "Package: karta"
+              echo "Version: $VER"
+              echo "Architecture: $arch"
+              echo "Maintainer: dchya24 <https://github.com/dchya24>"
+              echo "Installed-Size: $size"
+              echo "Section: mail"
+              echo "Priority: optional"
+              echo "Homepage: https://github.com/dchya24/karta"
+              echo "Description: Email client desktop native yang cepat dan ringan"
+              echo " Karta adalah email client pure native (tanpa Electron/WebView)"
+              echo " dengan pencarian FTS5 instan dan navigasi keyboard-first."
+            } > $pkg/DEBIAN/control
+            dpkg-deb --build --root-owner-group "$pkg" \
+              "dist/karta-linux-${arch}-${VER}.deb"
           done
-          ls -la dist
+
+      - name: Build .rpm
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          sudo apt-get update -qq && sudo apt-get install -y -qq rpm
+          topdir="$PWD/rpmbuild"
+          mkdir -p $topdir/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+          for pair in amd64:x86_64 arm64:aarch64; do
+            goarch=${pair%:*}; rpmarch=${pair#*:}
+            rpmbuild -bb --define "_topdir $topdir" --define "_version $VER" \
+              --define "_bindir_src $PWD/dist/karta-linux-$goarch" \
+              --define "_desktop_src $PWD/packaging/karta.desktop" \
+              --define "_icon_src $PWD/assets/icons/karta_512.png" \
+              --target "$rpmarch" packaging/karta.spec >/dev/null
+            cp "$topdir/RPMS/$rpmarch/karta-$VER-1."*.rpm \
+              "dist/karta-linux-${goarch}-${VER}.rpm"
+          done
+          rm dist/karta-linux-amd64 dist/karta-linux-arm64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.rpm
+          if-no-files-found: error
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build .app dan .dmg
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            GOOS=darwin GOARCH=$arch CGO_ENABLED=0 \
+              go build -trimpath -ldflags "-s -w" -o dist/karta-darwin-$arch ./cmd/karta
+            app="dist/Karta.app"
+            mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+            cp dist/karta-darwin-$arch "$app/Contents/MacOS/karta"
+            sed "s/@VERSION@/$VER/g" packaging/Info.plist > "$app/Contents/Info.plist"
+            cp assets/icons/karta.icns "$app/Contents/Resources/karta.icns"
+            codesign --force --deep -s - "$app" 2>/dev/null || true
+            stage="dist/dmg-$arch"
+            mkdir -p "$stage"
+            cp -R "$app" "$stage/"
+            hdiutil create -volname "Karta $VER" -srcfolder "$stage" \
+              -format UDZO -ov "dist/Karta-macos-$arch-$VER.dmg"
+            rm -rf "$stage" "$app"
+          done
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*.dmg
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build binary portable
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $env:GOOS="windows"; $env:GOARCH="amd64"; $env:CGO_ENABLED="0"
+          go build -trimpath -ldflags "-s -w" -o dist/karta-windows-amd64-portable.exe ./cmd/karta
+          go build -trimpath -ldflags "-s -w" -o dist/karta-windows-amd64.exe ./cmd/karta
+
+      - name: Build installer .exe (Inno Setup)
+        run: |
+          $ver = $env:GITHUB_REF_NAME.Substring(1)
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$ver" packaging/karta.iss
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*.exe
+          if-no-files-found: error
+
+  release:
+    needs: [linux, macos, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download semua artefak
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Daftar aset
+        run: ls -la dist
 
       - name: Release
         uses: softprops/action-gh-release@v2

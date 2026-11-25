@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Karta
+GenericName=Email Client
+Comment=Email client desktop native yang cepat dan ringan
+Exec=karta
+Icon=karta
+Categories=Network;Email;
+Terminal=false
+StartupWMClass=Karta
