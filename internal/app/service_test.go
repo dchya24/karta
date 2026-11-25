@@ -72,11 +72,28 @@ func TestAddAndRemoveAccount(t *testing.T) {
 	if contains(string(b), "rahasia") {
 		t.Fatal("password bocor di serialisasi DTO")
 	}
+	folderID, err := svc.db.EnsureFolder(int64(id), "INBOX", "inbox")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.UpsertMessage(&store.MessageHeader{
+		FolderID: int(folderID), UID: 1, Subject: "rahasia-fts", SenderAddr: "b@x.id",
+		Date: "2026-11-17T00:00:00Z",
+	}, &store.MessageBody{PlainText: "isi unik fts"}); err != nil {
+		t.Fatal(err)
+	}
 	if err := svc.RemoveAccount(ctx, id); err != nil {
 		t.Fatal(err)
 	}
 	if accs, _ = svc.ListAccounts(); len(accs) != 0 {
 		t.Fatal("akun harus terhapus")
+	}
+	var ftsCount int
+	if err := svc.db.QueryRow(`SELECT COUNT(*) FROM messages_fts`).Scan(&ftsCount); err != nil {
+		t.Fatal(err)
+	}
+	if ftsCount != 0 {
+		t.Fatalf("baris FTS tersisa %d setelah hapus akun", ftsCount)
 	}
 }
 

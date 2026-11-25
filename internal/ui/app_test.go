@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -34,7 +35,7 @@ func testService(t *testing.T) *app.Service {
 	for _, m := range ms {
 		if _, err := db.UpsertMessage(&store.MessageHeader{
 			FolderID: int(inbox), UID: m.uid, Subject: m.subj, Sender: m.sender,
-			SenderAddr: "x@" + m.sender, Date: "2026-11-17T01:0%d:00Z", Unread: true,
+			SenderAddr: "x@" + m.sender, Date: fmt.Sprintf("2026-11-17T01:0%d:00Z", m.uid), Unread: true,
 		}, &store.MessageBody{PlainText: "isi " + m.subj}); err != nil {
 			t.Fatal(err)
 		}

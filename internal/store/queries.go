@@ -240,6 +240,26 @@ func (db *DB) UpsertMessage(m *MessageHeader, body *MessageBody) (int64, error) 
 	return id, nil
 }
 
+// DeleteAccount menghapus akun beserta salinan indeks FTS yang ditinggalkan
+// cascade delete dalam satu transaksi.
+func (db *DB) DeleteAccount(id int64) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("mulai transaksi hapus akun %d: %w", id, err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM accounts WHERE id=?`, id); err != nil {
+		return fmt.Errorf("hapus akun %d: %w", id, err)
+	}
+	if _, err := tx.Exec(`DELETE FROM messages_fts WHERE rowid NOT IN (SELECT id FROM messages)`); err != nil {
+		return fmt.Errorf("bersihkan indeks FTS: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit hapus akun %d: %w", id, err)
+	}
+	return nil
+}
+
 // indexMessage menyegarkan baris FTS5 untuk satu pesan (FTS5 tidak
 // mendukung UPSERT: hapus lalu sisip).
 func (db *DB) indexMessage(id int64, m *MessageHeader, body *MessageBody) error {

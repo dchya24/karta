@@ -141,10 +141,7 @@ func (s *Service) RemoveAccount(_ context.Context, id int) error {
 			}
 		}
 	}
-	if _, err := s.db.Exec(`DELETE FROM accounts WHERE id=?`, id); err != nil {
-		return fmt.Errorf("hapus akun %d: %w", id, err)
-	}
-	return nil
+	return s.db.DeleteAccount(int64(id))
 }
 
 // ListAccounts mengembalikan akun terdaftar.

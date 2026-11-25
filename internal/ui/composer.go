@@ -81,6 +81,10 @@ func (s *state) openComposer(mode string) {
 	if err != nil {
 		return
 	}
+	// Reply/forward dikirim dari akun pesan asal, bukan akun terpilih.
+	if acc, ok := s.folderAcc[m.FolderID]; ok {
+		s.account = acc
+	}
 	quote := ""
 	if m.PlainText != "" {
 		quote = "\n\n----- Pesan asli -----\n" + m.PlainText

@@ -6,6 +6,7 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"strconv"
@@ -22,13 +23,25 @@ import (
 
 // state adalah kondisi UI: dibaca dan diubah hanya di main thread (view dan
 // callback window), diperbarui dari goroutine lewat Window.Update.
+// accFolders adalah satu bagian sidebar: satu akun + folder IMAP-nya.
+type accFolders struct {
+	acc     app.Account
+	folders []app.Folder
+}
+
+// sectionKey adalah id unik item sidebar "<accountID>:<folderID>".
+func sectionKey(f app.Folder) string {
+	return strconv.Itoa(f.AccountID) + ":" + strconv.Itoa(f.ID)
+}
+
 type state struct {
 	svc       *app.Service
 	win       *mygo.Window
-	folders   []app.Folder
-	account   int    // akun terpilih (0 = pertama)
-	folder    int    // folder terpilih (ID)
-	folderSel string // pilihan sidebar (indeks folder sebagai string)
+	sections  []accFolders // satu bagian per akun, urut email
+	folderAcc map[int]int  // folderID → accountID
+	account   int          // akun terpilih
+	folder    int          // folder terpilih (ID)
+	folderSel string       // pilihan sidebar (sectionKey)
 	query     string
 	list      ui.ListState
 	msgs      []app.MessageHeader
@@ -55,6 +68,9 @@ type state struct {
 	syncMsg  string
 	syncFail bool
 
+	// tema; nil = ikut penampilan sistem
+	theme *ui.Theme
+
 	// composer
 	composerOpen              bool
 	composerMode              string // new | reply | forward
@@ -74,6 +90,12 @@ func SetReadyLogger(fn func()) { readyLogger = fn }
 // loop aplikasi sampai keluar.
 func Run(svc *app.Service) error {
 	st := &state{svc: svc, fetching: map[int]bool{}}
+	switch loadPrefs().Appearance {
+	case "light":
+		st.theme = kartaTheme(false)
+	case "dark":
+		st.theme = kartaTheme(true)
+	}
 	syncCtx, cancelSync := context.WithCancel(context.Background())
 	defer cancelSync()
 	mygo.App.WhenReady(func() {
@@ -140,23 +162,34 @@ func (s *state) reloadFolders() {
 		log.Printf("ui: akun: %v", err)
 		return
 	}
-	s.folders = nil
-	if len(accs) > 0 {
-		if s.account == 0 || s.account > accs[len(accs)-1].ID {
-			s.account = accs[0].ID
-		}
-		fs, err := s.svc.ListFolders(s.account)
+	s.sections = nil
+	s.folderAcc = map[int]int{}
+	for _, a := range accs {
+		fs, err := s.svc.ListFolders(a.ID)
 		if err != nil {
-			log.Printf("ui: folder: %v", err)
-		} else {
-			s.folders = fs
+			log.Printf("ui: folder %s: %v", a.Email, err)
+			continue
+		}
+		s.sections = append(s.sections, accFolders{acc: a, folders: fs})
+		for _, f := range fs {
+			s.folderAcc[f.ID] = a.ID
 		}
 	}
-	if len(s.folders) > 0 {
-		s.folder = s.folders[0].ID
-		s.folderSel = "0"
-	} else {
+	// Pertahankan seleksi lama kalau foldernya masih ada.
+	if s.folder != 0 {
+		if _, ok := s.folderAcc[s.folder]; !ok {
+			s.folder = 0
+		}
+	}
+	if s.folder == 0 {
 		s.folder, s.folderSel = 0, ""
+		for _, sec := range s.sections {
+			if len(sec.folders) > 0 {
+				f := sec.folders[0]
+				s.account, s.folder, s.folderSel = f.AccountID, f.ID, sectionKey(f)
+				break
+			}
+		}
 	}
 	s.reloadMessages()
 }
@@ -202,6 +235,62 @@ func (s *state) saveAccount() {
 	s.refreshNow() // sinkron pertama langsung
 }
 
+// toggleTheme mengalihkan tema terang/gelap dan menyimpan pilihannya.
+func (s *state) toggleTheme(dark bool) {
+	if dark {
+		s.theme = kartaTheme(false)
+		savePrefs(prefs{Appearance: "light"})
+		return
+	}
+	s.theme = kartaTheme(true)
+	savePrefs(prefs{Appearance: "dark"})
+}
+
+// themeIcon ikon tombol tema: saat gelap tawarkan terang, dan sebaliknya.
+func themeIcon(dark bool) string {
+	if dark {
+		return "☀"
+	}
+	return "🌙"
+}
+
+// switchTo memilih folder pertama akun sebagai folder aktif. Main thread saja.
+func (s *state) switchTo(accID int) {
+	for _, sec := range s.sections {
+		if sec.acc.ID != accID || len(sec.folders) == 0 {
+			continue
+		}
+		f := sec.folders[0]
+		s.account, s.folder, s.folderSel = accID, f.ID, sectionKey(f)
+		s.reloadMessages()
+		return
+	}
+}
+
+// deleteAccount meminta konfirmasi lalu menghapus akun (pesan tersinkron ikut
+// terhapus dari perangkat; kredensial keyring juga dibersihkan).
+func (s *state) deleteAccount(acc app.Account) {
+	res, err := mygo.Dialog.Message(mygo.MessageOptions{
+		Parent:  s.win,
+		Title:   "Hapus akun",
+		Message: "Hapus akun " + acc.Email + "?",
+		Detail:  "Folder dan pesan yang tersinkron dihapus dari perangkat ini; " +
+			"isi kotak surat tetap aman di server. Kredensial di Keyring ikut dihapus.",
+		Buttons:            []string{"Hapus", "Batal"},
+		CancelButton:       1,
+		DestructiveButtons: []int{0},
+	})
+	if err != nil || res.Button != 0 {
+		return
+	}
+	if err := s.svc.RemoveAccount(context.Background(), acc.ID); err != nil {
+		log.Printf("ui: hapus akun %s: %v", acc.Email, err)
+		return
+	}
+	s.account, s.folder, s.folderSel = 0, 0, ""
+	s.reloadFolders()
+}
+
 // fetchBodyLazy mengambil isi pesan di goroutine bila belum ter-cache.
 func (s *state) fetchBodyLazy(id int) {
 	if s.fetching[id] {
@@ -221,6 +310,13 @@ func (s *state) fetchBodyLazy(id int) {
 
 // view adalah builder UI native; berjalan tiap frame di main thread.
 func (s *state) view(c *ui.Context) {
+	// Tema brand Karta menggantikan tema sistem sebelum widget apa pun
+	// dibangun; s.theme nil berarti mengikuti penampilan sistem.
+	if s.theme != nil {
+		c.SetTheme(s.theme)
+	} else {
+		c.SetTheme(kartaTheme(c.Theme().Dark))
+	}
 	t := c.Theme()
 	s.shortcuts(c)
 
@@ -241,31 +337,56 @@ func (s *state) view(c *ui.Context) {
 
 	ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {
 		// Pane 1: sidebar akun + folder + unread.
-		ui.Column(c).Width(220).Shrink(0).PaddingY(12).Gap(6).Background(t.Surface).Children(func() {
+		ui.Column(c).Width(240).Shrink(0).PaddingY(12).Gap(6).Background(t.Surface).Children(func() {
 			ui.Row(c).Padding(0, 16).AlignItems(ui.Center).Gap(8).Children(func() {
 				ui.Image(c, kartaLogo).Size(28, 28)
 				ui.Text(c, "Karta").Bold().Grow(1)
-				if ui.Button(c, "+").Label("Tambah akun").Clicked() {
-					s.showAccount = !s.showAccount
+				if ui.Button(c, themeIcon(t.Dark)).Label("Ganti tema terang/gelap").Clicked() {
+					s.toggleTheme(t.Dark)
 				}
+				ui.MenuButton(c, "⋯", func(m *ui.Menu) {
+					if m.Item("Tambah akun…").Chosen() {
+						s.showAccount = true
+					}
+					m.Separator()
+					for _, sec := range s.sections {
+						acc := sec.acc
+						if m.Item(acc.Email).Radio(acc.ID == s.account).Chosen() {
+							s.switchTo(acc.ID)
+						}
+					}
+					m.Separator()
+					for _, sec := range s.sections {
+						acc := sec.acc
+						if m.Item("Hapus " + acc.Email).Danger().Chosen() {
+							s.deleteAccount(acc)
+						}
+					}
+				}).Label("Kelola akun")
 			})
-			if len(s.folders) > 0 {
+			if len(s.sections) > 0 {
 				if ui.Sidebar(c, &s.folderSel, func() {
-					for i, f := range s.folders {
-						ui.SidebarItem(c, strconv.Itoa(i), nil, f.Name).Children(func() {
-							if f.Unread > 0 {
-								ui.Badge(c, strconv.Itoa(f.Unread))
+					for _, sec := range s.sections {
+						acc, folders := sec.acc, sec.folders
+						ui.SidebarSection(c, acc.Email, nil, func() {
+							for _, f := range folders {
+								ui.SidebarItem(c, sectionKey(f), nil, f.Name).Children(func() {
+									if f.Unread > 0 {
+										ui.Badge(c, strconv.Itoa(f.Unread))
+									}
+								})
 							}
 						})
 					}
-				}).Grow(1).Label("Folder").Changed() {
-					if idx, err := strconv.Atoi(s.folderSel); err == nil && idx >= 0 && idx < len(s.folders) {
-						s.folder = s.folders[idx].ID
+				}).Grow(1).Label("Akun").Changed() {
+					var fID int
+					if _, err := fmt.Sscanf(s.folderSel, "%d:%d", &s.account, &fID); err == nil && fID > 0 {
+						s.folder = fID
 						s.reloadMessages()
 					}
 				}
 			} else {
-				ui.Text(c, "Belum ada akun.\nTekan + untuk menambah.").TextColor(t.TextMuted).Padding(16)
+				ui.Text(c, "Belum ada akun.\nBuka menu ⋯ untuk menambah.").TextColor(t.TextMuted).Padding(16)
 			}
 			syncLabel := "Sinkronkan"
 			if s.syncBusy {
@@ -316,22 +437,22 @@ func (s *state) accountForm(c *ui.Context) {
 	t := c.Theme()
 	ui.Text(c, "Tambah Akun").Bold().FontSize(18)
 	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "Email").Width(120)
+		ui.Text(c, "Email").Width(90)
 		ui.TextInput(c.Key("a-email"), &s.fEmail).Grow(1).Placeholder("nama@contoh.id").Label("Email")
 	})
 	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "Password").Width(120)
+		ui.Text(c, "Password").Width(90)
 		ui.TextInput(c.Key("a-pass"), &s.fPass).Grow(1).Password().Placeholder("App password").Label("Password")
 	})
 	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "IMAP host").Width(120)
+		ui.Text(c, "IMAP host").Width(90)
 		ui.TextInput(c.Key("a-imap"), &s.fIMAPHost).Grow(1).Placeholder("imap.contoh.id").Label("IMAP host")
-		ui.TextInput(c.Key("a-iport"), &s.fIMAPPort).Width(80).Placeholder("993").Label("IMAP port")
+		ui.TextInput(c.Key("a-iport"), &s.fIMAPPort).Width(64).Placeholder("993").Label("IMAP port")
 	})
 	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "SMTP host").Width(120)
+		ui.Text(c, "SMTP host").Width(90)
 		ui.TextInput(c.Key("a-smtp"), &s.fSMTPHost).Grow(1).Placeholder("smtp.contoh.id").Label("SMTP host")
-		ui.TextInput(c.Key("a-sport"), &s.fSMTPPort).Width(80).Placeholder("465").Label("SMTP port")
+		ui.TextInput(c.Key("a-sport"), &s.fSMTPPort).Width(64).Placeholder("465").Label("SMTP port")
 	})
 	ui.Checkbox(c, &s.fIMAPTLS, "Gunakan TLS untuk IMAP")
 	if s.oauthMsg != "" {
@@ -417,6 +538,10 @@ func (s *state) row(c *ui.Context, i int) {
 		suffix = " 📎"
 	}
 	ui.Row(c).Padding(8, 10).Gap(8).Children(func() {
+		// Dot penanda belum dibaca; bold saja kurang cepat discan.
+		if m.Unread {
+			ui.Textf(c, "●").FontSize(8).TextColor(t.Accent)
+		}
 		ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
 			senderText := ui.Textf(c, "%s%s", sender, suffix).FontWeight(weight).Grow(0)
 			subjectText := ui.Textf(c, "%s", subject).FontSize(12)
@@ -429,7 +554,7 @@ func (s *state) row(c *ui.Context, i int) {
 			}
 		})
 		if m.Date != "" {
-			ui.Textf(c, "%s", shortDate(m.Date)).TextColor(t.TextMuted).FontSize(11)
+			ui.Textf(c, "%s", shortDate(m.Date)).TextColor(t.TextMuted).FontSize(11).Shrink(0)
 		}
 	})
 }
