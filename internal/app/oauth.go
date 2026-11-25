@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -41,6 +42,20 @@ func IsOAuthRelogin(err error) (string, bool) {
 		return re.Email, true
 	}
 	return "", false
+}
+
+const mailScope = "https://mail.google.com/"
+
+// hasGmailScope memeriksa apakah string scope granted memuat scope Gmail.
+func hasGmailScope(scope string) bool {
+	return slices.Contains(strings.Fields(scope), mailScope)
+}
+
+// oauthReloginScope menandakan token berjalan tanpa izin Gmail sehingga
+// Gmail menolak XOAUTH2 meski refresh masih sukses — butuh re-consent.
+func oauthReloginScope(email, granted string) error {
+	return &OAuthReloginError{Email: email,
+		Err: fmt.Errorf("token %s tanpa izin Gmail (scope: %s) — login ulang dan setujui izin Gmail", email, granted)}
 }
 
 func isOAuthTokenRevoked(err error) bool {
@@ -183,6 +198,10 @@ func (s *Service) OAuthExchange(ctx context.Context, clientID, secret, redirectU
 	if err != nil {
 		return "", fmt.Errorf("tukar code: %w", err)
 	}
+	// Tolak simpan token tanpa izin Gmail: IMAP/SMTP XOAUTH2 pasti ditolak.
+	if granted, _ := tok.Extra("scope").(string); granted != "" && !hasGmailScope(granted) {
+		return "", oauthReloginScope("", granted)
+	}
 	email, err := emailFromIDToken(tok)
 	if err != nil {
 		return "", err
@@ -251,6 +270,12 @@ func (s *Service) oauthToken(ctx context.Context, email string) (string, error) 
 			return "", &OAuthReloginError{Email: email, Err: err}
 		}
 		return "", fmt.Errorf("perbarui token %s: %w", email, err)
+	}
+	// Google bisa memberi token tanpa izin Gmail (scope ditolak/dihapus
+	// pengguna saat consent) — refresh sukses tapi Gmail menolak XOAUTH2.
+	// Deteksi di sini supaya UI menawarkan login ulang, bukan retry tanpa henti.
+	if granted, _ := fresh.Extra("scope").(string); granted != "" && !hasGmailScope(granted) {
+		return "", oauthReloginScope(email, granted)
 	}
 	if fresh.AccessToken != tok.AccessToken {
 		if err := s.saveOAuthToken(email, fresh); err != nil {

@@ -751,12 +751,16 @@ func (s *state) readingPane(c *ui.Context) {
 		ui.Text(c, "(isi pesan kosong)").TextColor(t.TextMuted).Grow(1)
 	} else {
 		doc := s.readerDocument(m.ID, m.PlainText)
-		richtext.Editor(c.Key("reader-body"), doc, richtext.EditorOptions{
-			Label:      "Isi pesan",
-			ReadOnly:   true,
-			NoMarkdown: true,
-			OnLink:     s.openLink,
-		}).Grow(1)
+		// Bungkus editor dengan Box Clip: painter clip mygo tak membatasi
+		// Draw editor sendiri, jadi isi tergulir bisa meluber menimpa header.
+		ui.Box(c).Grow(1).Clip().Children(func() {
+			richtext.Editor(c.Key("reader-body"), doc, richtext.EditorOptions{
+				Label:      "Isi pesan",
+				ReadOnly:   true,
+				NoMarkdown: true,
+				OnLink:     s.openLink,
+			}).Fill()
+		})
 	}
 	// Aksi lampiran + fallback HTML (PRD §3.3).
 	ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
@@ -781,6 +785,9 @@ func (s *state) readerDocument(id int, plain string) *richtext.Document {
 		s.readerID = id
 		s.readerText = plain
 		s.readerDoc = richtext.NewDocument(linkifyText(plain))
+		// NewDocument meletakkan caret di akhir teks; reveal bawaan editor
+		// lalu menggulir ke caret itu — baca pesan harus mulai dari atas.
+		s.readerDoc.SetSelection(0, 0)
 	}
 	return s.readerDoc
 }

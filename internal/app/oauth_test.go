@@ -236,3 +236,18 @@ func TestOAuthReloginErrorDetection(t *testing.T) {
 		t.Fatalf("IsOAuthRelogin: ok=%v email=%q", ok, email)
 	}
 }
+
+func TestGmailScopeValidation(t *testing.T) {
+	if !hasGmailScope("https://mail.google.com/ openid email") ||
+		!hasGmailScope("openid https://mail.google.com/") {
+		t.Fatal("scope Gmail harus terdeteksi")
+	}
+	if hasGmailScope("https://www.googleapis.com/auth/userinfo.email openid") || hasGmailScope("") {
+		t.Fatal("token tanpa izin Gmail tidak boleh lolos")
+	}
+	err := oauthReloginScope("devdinar05@gmail.com", "openid email")
+	email, ok := IsOAuthRelogin(err)
+	if !ok || email != "devdinar05@gmail.com" {
+		t.Fatalf("oauthReloginScope harus OAuthReloginError: ok=%v email=%q", ok, email)
+	}
+}
