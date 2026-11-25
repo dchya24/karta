@@ -10,15 +10,16 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/richtext"
 
+	kartaicons "karta/assets/icons"
 	"karta/internal/app"
 	"karta/internal/sync"
-	kartaicons "karta/assets/icons"
 )
 
 // state adalah kondisi UI: dibaca dan diubah hanya di main thread (view dan
@@ -43,9 +44,16 @@ type state struct {
 	folder    int          // folder terpilih (ID)
 	folderSel string       // pilihan sidebar (sectionKey)
 	query     string
+	searchRef ui.Handle
 	list      ui.ListState
 	msgs      []app.MessageHeader
 	selected  int
+
+	// cache dokumen reading pane (richtext read-only dengan tautan klik)
+	readerID   int
+	readerText string
+	readerDoc  *richtext.Document
+	actionMsg  string
 
 	// form tambah akun
 	showAccount bool
@@ -409,10 +417,13 @@ func (s *state) view(c *ui.Context) {
 		var splitSize float32 = 380
 		ui.Split(c, &splitSize, func() {
 			ui.Column(c).Fill().Gap(0).Children(func() {
-				ui.Row(c).Padding(8, 10).Children(func() {
-					if ui.TextInput(c.Key("a-query"), &s.query).Grow(1).
-						Placeholder("Cari…").Label("Cari").Changed() {
+				ui.Row(c).Padding(8, 10).Gap(6).AlignItems(ui.Center).Children(func() {
+					if ui.TextInput(c.Key("a-query"), &s.query).Bind(&s.searchRef).Grow(1).
+						Placeholder("Cari… (/)").Label("Cari").Changed() {
 						s.reloadMessages()
+					}
+					if ui.Button(c, "Tulis").Label("Tulis email baru").Clicked() {
+						s.openComposer("new")
 					}
 				})
 				s.list.Selected = &s.selected
@@ -554,40 +565,90 @@ func (s *state) row(c *ui.Context, i int) {
 			}
 		})
 		if m.Date != "" {
-			ui.Textf(c, "%s", shortDate(m.Date)).TextColor(t.TextMuted).FontSize(11).Shrink(0)
+			dateText := ui.Textf(c, "%s", shortDate(m.Date)).FontSize(11).Shrink(0)
+			if chosen {
+				dateText.TextColor(t.AccentText)
+			} else {
+				dateText.TextColor(t.TextMuted)
+			}
 		}
 	})
 }
 
-// readingPane menampilkan pesan terpilih sebagai teks bersih. Body yang
-// belum ter-cache diambil di goroutine (tidak pernah di main thread).
+// readingPane menampilkan pesan terpilih sebagai teks bersih dengan tautan
+// yang dapat diklik. Body yang belum ter-cache diambil di goroutine.
 func (s *state) readingPane(c *ui.Context) {
 	t := c.Theme()
 	if s.selected >= len(s.msgs) {
 		ui.Text(c, "Pilih pesan untuk dibaca").TextColor(t.TextMuted)
 		return
 	}
+	wasUnread := s.msgs[s.selected].Unread
 	id := s.msgs[s.selected].ID
 	m, err := s.svc.PeekMessage(id)
 	if err != nil {
 		ui.Textf(c, "gagal memuat pesan: %v", err).TextColor(t.TextMuted)
 		return
 	}
+	if wasUnread && !m.Unread {
+		s.msgs[s.selected].Unread = false
+		s.adjustFolderUnread(m.FolderID, -1)
+		s.syncSeenAsync(m.ID, true)
+	}
 	if !m.Fetched {
 		ui.Text(c, "Mengambil isi dari server…").TextColor(t.TextMuted)
 		s.fetchBodyLazy(id)
 		return
 	}
+	ui.Row(c).Gap(6).Wrap().AlignItems(ui.Center).Children(func() {
+		if ui.Button(c, "Balas").Clicked() {
+			s.openComposer("reply")
+		}
+		if ui.Button(c, "Balas Semua").Clicked() {
+			s.openComposer("reply_all")
+		}
+		if ui.Button(c, "Teruskan").Clicked() {
+			s.openComposer("forward")
+		}
+		readLabel := "Belum dibaca"
+		if m.Unread {
+			readLabel = "Sudah dibaca"
+		}
+		if ui.Button(c, readLabel).Label("Tandai " + readLabel).Clicked() {
+			s.toggleRead(m.ID, m.Unread)
+		}
+		if ui.Button(c, "Arsip").Clicked() {
+			s.archiveMessage(m.ID)
+		}
+		if ui.Button(c, "Hapus").Clicked() {
+			s.deleteMessage(m.ID)
+		}
+	})
 	ui.Textf(c, "%s", m.Subject).Bold().FontSize(18)
-	ui.Textf(c, "%s  →  %s", m.Sender, m.To).TextColor(t.TextMuted).FontSize(12)
+	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Textf(c, "Dari: %s", m.Sender).TextColor(t.TextMuted).FontSize(12).Grow(1)
+		if m.Date != "" {
+			ui.Textf(c, "%s", formatFullDate(m.Date)).TextColor(t.TextMuted).FontSize(12).Shrink(0)
+		}
+	})
+	ui.Textf(c, "Kepada: %s", m.To).TextColor(t.TextMuted).FontSize(12)
+	if m.Cc != "" {
+		ui.Textf(c, "Cc: %s", m.Cc).TextColor(t.TextMuted).FontSize(12)
+	}
 	ui.Divider(c)
 	if m.PlainText == "" {
-		ui.Text(c, "(isi pesan kosong)").TextColor(t.TextMuted)
+		ui.Text(c, "(isi pesan kosong)").TextColor(t.TextMuted).Grow(1)
 	} else {
-		ui.Textf(c, "%s", m.PlainText)
+		doc := s.readerDocument(m.ID, m.PlainText)
+		richtext.Editor(c.Key("reader-body"), doc, richtext.EditorOptions{
+			Label:      "Isi pesan",
+			ReadOnly:   true,
+			NoMarkdown: true,
+			OnLink:     s.openLink,
+		}).Grow(1)
 	}
 	// Aksi lampiran + fallback HTML (PRD §3.3).
-	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
 		if len(m.Attachments) > 0 {
 			ui.Text(c, "Lampiran:").TextColor(t.TextMuted).FontSize(12)
 			for _, a := range m.Attachments {
@@ -601,11 +662,106 @@ func (s *state) readingPane(c *ui.Context) {
 				s.openInBrowser(m.ID)
 			}
 		}
+		if s.actionMsg != "" {
+			ui.Textf(c, "%s", s.actionMsg).TextColor(t.Danger).FontSize(12)
+		}
 	})
+}
+
+func (s *state) readerDocument(id int, plain string) *richtext.Document {
+	if s.readerDoc == nil || s.readerID != id || s.readerText != plain {
+		s.readerID = id
+		s.readerText = plain
+		s.readerDoc = richtext.NewDocument(linkifyText(plain))
+	}
+	return s.readerDoc
+}
+
+func (s *state) openLink(raw string) {
+	if strings.HasPrefix(strings.ToLower(raw), "mailto:") {
+		s.openMailto(raw)
+		return
+	}
+	go func() {
+		if err := mygo.Shell.OpenExternal(raw); err != nil {
+			log.Printf("ui: buka tautan %s: %v", raw, err)
+		}
+	}()
+}
+
+// runAction menjalankan operasi pesan di goroutine lalu memperbarui UI di main
+// thread via Window.Update; pada mode uji headless (win == nil) berjalan langsung.
+func (s *state) runAction(op func(context.Context) error) {
+	s.actionMsg = ""
+	win := s.win
+	if win == nil {
+		if err := op(context.Background()); err != nil {
+			s.actionMsg = err.Error()
+			return
+		}
+		s.reloadFolders()
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		err := op(ctx)
+		win.Update(func() {
+			if err != nil {
+				s.actionMsg = err.Error()
+				log.Printf("ui: aksi pesan: %v", err)
+				return
+			}
+			s.reloadFolders()
+		})
+	}()
+}
+
+func (s *state) toggleRead(id int, currentlyUnread bool) {
+	s.runAction(func(ctx context.Context) error {
+		return s.svc.MarkRead(ctx, id, currentlyUnread)
+	})
+}
+
+func (s *state) archiveMessage(id int) {
+	s.runAction(func(ctx context.Context) error {
+		return s.svc.Archive(ctx, id)
+	})
+}
+
+func (s *state) deleteMessage(id int) {
+	s.runAction(func(ctx context.Context) error {
+		return s.svc.Delete(ctx, id)
+	})
+}
+
+func (s *state) syncSeenAsync(id int, read bool) {
+	if s.win == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		_ = s.svc.MarkRead(ctx, id, read)
+	}()
+}
+
+func (s *state) adjustFolderUnread(folderID, delta int) {
+	for i := range s.sections {
+		for j := range s.sections[i].folders {
+			if s.sections[i].folders[j].ID == folderID {
+				s.sections[i].folders[j].Unread = max(0, s.sections[i].folders[j].Unread+delta)
+				return
+			}
+		}
+	}
 }
 
 // shortcuts memasang navigasi keyboard PRD §3.5.
 func (s *state) shortcuts(c *ui.Context) {
+	if s.composerOpen || s.showAccount || c.FocusTakesText() {
+		return
+	}
 	if c.Shortcut(0, ui.KeyDown) || c.Shortcut(0, ui.KeyJ) {
 		if s.selected < len(s.msgs)-1 {
 			s.selected++
@@ -616,18 +772,43 @@ func (s *state) shortcuts(c *ui.Context) {
 			s.selected--
 		}
 	}
-	if s.composerOpen {
+	if c.Shortcut(0, ui.KeySlash) {
+		s.searchRef.SelectAll(c)
 		return
 	}
 	if c.Shortcut(0, ui.KeyC) {
 		s.openComposer("new")
+		return
 	}
-	if c.Shortcut(0, ui.KeyR) && s.selected < len(s.msgs) {
+	if s.selected >= len(s.msgs) {
+		return
+	}
+	if c.Shortcut(ui.Shift, ui.KeyR) {
+		s.openComposer("reply_all")
+	} else if c.Shortcut(0, ui.KeyR) {
 		s.openComposer("reply")
 	}
-	if c.Shortcut(0, ui.KeyF) && s.selected < len(s.msgs) {
+	if c.Shortcut(0, ui.KeyF) {
 		s.openComposer("forward")
 	}
+	if c.Shortcut(0, ui.KeyE) {
+		s.archiveMessage(s.msgs[s.selected].ID)
+	}
+	if c.Shortcut(0, ui.KeyU) {
+		m := s.msgs[s.selected]
+		s.toggleRead(m.ID, m.Unread)
+	}
+	if c.Shortcut(0, ui.KeyDelete) {
+		s.deleteMessage(s.msgs[s.selected].ID)
+	}
+}
+
+// formatFullDate menampilkan timestamp ISO menjadi "YYYY-MM-DD HH:MM".
+func formatFullDate(iso string) string {
+	if t, err := time.Parse(time.RFC3339, iso); err == nil {
+		return t.Local().Format("2006-01-02 15:04")
+	}
+	return iso
 }
 
 // saveLabel mengubah label tombol simpan saat OAuth berjalan.

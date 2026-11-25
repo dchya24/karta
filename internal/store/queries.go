@@ -40,6 +40,7 @@ type MessageHeader struct {
 	Sender        string
 	SenderAddr    string
 	Recipients    string
+	Cc            string
 	Date          string
 	Unread        bool
 	HasAttachment bool
@@ -172,6 +173,19 @@ func (db *DB) FolderByID(id int64) (*Folder, error) {
 	return f, nil
 }
 
+// FolderByRole mencari folder pertama akun dengan peran tertentu (archive, trash, dll.).
+func (db *DB) FolderByRole(accountID int64, role string) (*Folder, error) {
+	f := &Folder{}
+	err := db.QueryRow(`SELECT id, account_id, name, role, last_seen_uid,
+			(SELECT COUNT(*) FROM messages m WHERE m.folder_id=folders.id AND m.unread=1)
+		FROM folders WHERE account_id=? AND role=? ORDER BY id LIMIT 1`, accountID, role).
+		Scan(&f.ID, &f.AccountID, &f.Name, &f.Role, &f.LastSeenUID, &f.Unread)
+	if err != nil {
+		return nil, fmt.Errorf("folder peran %q akun %d: %w", role, accountID, err)
+	}
+	return f, nil
+}
+
 // ListAttachments mengembalikan lampiran satu pesan (tanpa isi blob).
 func (db *DB) ListAttachments(messageID int64) ([][2]string, error) {
 	rows, err := db.Query(`SELECT filename, COALESCE(content_type,'') FROM attachments
@@ -211,16 +225,16 @@ func (db *DB) UpsertMessage(m *MessageHeader, body *MessageBody) (int64, error) 
 			sql.NullString{String: body.RawHTML, Valid: true}
 	}
 	res, err := db.Exec(`INSERT INTO messages
-		(folder_id, uid, message_id, subject, sender, sender_addr, recipients,
+		(folder_id, uid, message_id, subject, sender, sender_addr, recipients, cc,
 		 date, unread, has_attachment, size, plain_text, raw_html, fetched)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(folder_id, uid) DO UPDATE SET
 			message_id=excluded.message_id, subject=excluded.subject,
 			sender=excluded.sender, sender_addr=excluded.sender_addr,
-			recipients=excluded.recipients, date=excluded.date,
+			recipients=excluded.recipients, cc=excluded.cc, date=excluded.date,
 			has_attachment=excluded.has_attachment, size=excluded.size`,
 		m.FolderID, m.UID, m.MessageID, m.Subject, m.Sender, m.SenderAddr,
-		m.Recipients, m.Date, boolInt(m.Unread), boolInt(m.HasAttachment),
+		m.Recipients, m.Cc, m.Date, boolInt(m.Unread), boolInt(m.HasAttachment),
 		m.Size, plain, raw, fetched)
 	if err != nil {
 		return 0, fmt.Errorf("simpan pesan uid=%d folder=%d: %w", m.UID, m.FolderID, err)
@@ -266,9 +280,10 @@ func (db *DB) indexMessage(id int64, m *MessageHeader, body *MessageBody) error 
 	if _, err := db.Exec(`DELETE FROM messages_fts WHERE rowid=?`, id); err != nil {
 		return fmt.Errorf("hapus indeks FTS pesan %d: %w", id, err)
 	}
+	recips := strings.TrimSpace(m.Recipients + " " + m.Cc)
 	if _, err := db.Exec(`INSERT INTO messages_fts(rowid, subject, sender_addr, recipients, plain_text)
 		VALUES (?,?,?,?,?)`,
-		id, m.Subject, m.SenderAddr, m.Recipients, body.PlainText); err != nil {
+		id, m.Subject, m.SenderAddr, recips, body.PlainText); err != nil {
 		return fmt.Errorf("indeks FTS pesan %d: %w", id, err)
 	}
 	return nil
@@ -283,13 +298,68 @@ func (db *DB) SetMessageBody(id int64, body *MessageBody) error {
 	var m MessageHeader
 	if err := db.QueryRow(`SELECT folder_id, uid, COALESCE(message_id,''),
 			COALESCE(subject,''), COALESCE(sender,''), COALESCE(sender_addr,''),
-			COALESCE(recipients,'')
+			COALESCE(recipients,''), COALESCE(cc,'')
 		FROM messages WHERE id=?`, id).
 		Scan(&m.FolderID, &m.UID, &m.MessageID, &m.Subject, &m.Sender,
-			&m.SenderAddr, &m.Recipients); err != nil {
+			&m.SenderAddr, &m.Recipients, &m.Cc); err != nil {
 		return fmt.Errorf("baca header pesan %d: %w", id, err)
 	}
 	return db.indexMessage(id, &m, body)
+}
+
+// MoveMessage memindahkan pesan ke folder tujuan secara atomik; menghindari
+// bentrok UNIQUE(folder_id, uid) dengan UID sementara negatif bila perlu.
+func (db *DB) MoveMessage(id, destFolderID int64, newUID uint32) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("mulai transaksi pindah pesan %d: %w", id, err)
+	}
+	defer tx.Rollback()
+	var uid int64
+	if newUID > 0 {
+		uid = int64(newUID)
+	} else {
+		if err := tx.QueryRow(`SELECT uid FROM messages WHERE id=?`, id).Scan(&uid); err != nil {
+			return fmt.Errorf("baca uid pesan %d: %w", id, err)
+		}
+		var exists int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM messages WHERE folder_id=? AND uid=? AND id!=?`,
+			destFolderID, uid, id).Scan(&exists); err != nil {
+			return fmt.Errorf("cek uid tujuan: %w", err)
+		}
+		if exists > 0 {
+			uid = -id
+		}
+	}
+	if _, err := tx.Exec(`UPDATE messages SET folder_id=?, uid=? WHERE id=?`,
+		destFolderID, uid, id); err != nil {
+		return fmt.Errorf("pindah pesan %d ke folder %d: %w", id, destFolderID, err)
+	}
+	return tx.Commit()
+}
+
+// SetMessageUID memperbarui UID lokal setelah IMAP MOVE mengembalikan UID baru.
+func (db *DB) SetMessageUID(id int64, uid uint32) error {
+	if _, err := db.Exec(`UPDATE messages SET uid=? WHERE id=?`, uid, id); err != nil {
+		return fmt.Errorf("update uid pesan %d: %w", id, err)
+	}
+	return nil
+}
+
+// DeleteMessage menghapus pesan beserta baris FTS-nya dalam satu transaksi.
+func (db *DB) DeleteMessage(id int64) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("mulai transaksi hapus pesan %d: %w", id, err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM messages WHERE id=?`, id); err != nil {
+		return fmt.Errorf("hapus pesan %d: %w", id, err)
+	}
+	if _, err := tx.Exec(`DELETE FROM messages_fts WHERE rowid=?`, id); err != nil {
+		return fmt.Errorf("hapus FTS pesan %d: %w", id, err)
+	}
+	return tx.Commit()
 }
 
 // ListMessages mengembalikan pesan pada folder, terbaru dulu. Bila query
@@ -297,7 +367,7 @@ func (db *DB) SetMessageBody(id int64, body *MessageBody) error {
 func (db *DB) ListMessages(folderID int64, query string) ([]MessageHeader, error) {
 	const cols = `id, folder_id, uid, COALESCE(message_id,''), COALESCE(subject,''),
 		COALESCE(sender,''), COALESCE(sender_addr,''), COALESCE(recipients,''),
-		COALESCE(date,''), unread, has_attachment, size`
+		COALESCE(cc,''), COALESCE(date,''), unread, has_attachment, size`
 	var (
 		rows *sql.Rows
 		err  error
@@ -366,7 +436,7 @@ func (db *DB) fetchByIDs(folderID int64, ids []int64) (*sql.Rows, error) {
 	}
 	const cols = `id, folder_id, uid, COALESCE(message_id,''), COALESCE(subject,''),
 		COALESCE(sender,''), COALESCE(sender_addr,''), COALESCE(recipients,''),
-		COALESCE(date,''), unread, has_attachment, size`
+		COALESCE(cc,''), COALESCE(date,''), unread, has_attachment, size`
 	rows, err := db.Query(`SELECT `+cols+` FROM messages
 		WHERE folder_id=? AND id IN (`+ph[:len(ph)-1]+`)`, args...)
 	if err != nil {
@@ -389,7 +459,7 @@ func sortMessageHeaders(m []MessageHeader) {
 func (db *DB) GetMessage(id int64) (*MessageHeader, *MessageBody, error) {
 	h, err := db.queryHeader(`SELECT id, folder_id, uid, COALESCE(message_id,''),
 			COALESCE(subject,''), COALESCE(sender,''), COALESCE(sender_addr,''),
-			COALESCE(recipients,''), COALESCE(date,''), unread, has_attachment, size
+			COALESCE(recipients,''), COALESCE(cc,''), COALESCE(date,''), unread, has_attachment, size
 		FROM messages WHERE id=?`, id)
 	if err != nil {
 		return nil, nil, err
@@ -418,7 +488,7 @@ func (db *DB) queryHeader(q string, args ...any) (*MessageHeader, error) {
 	h := &MessageHeader{}
 	var unread, att int
 	if err := row.Scan(&h.ID, &h.FolderID, &h.UID, &h.MessageID, &h.Subject,
-		&h.Sender, &h.SenderAddr, &h.Recipients, &h.Date, &unread, &att, &h.Size); err != nil {
+		&h.Sender, &h.SenderAddr, &h.Recipients, &h.Cc, &h.Date, &unread, &att, &h.Size); err != nil {
 		return nil, fmt.Errorf("baca header pesan: %w", err)
 	}
 	h.Unread, h.HasAttachment = unread == 1, att == 1
@@ -431,7 +501,7 @@ func scanHeaders(rows *sql.Rows) ([]MessageHeader, error) {
 		h := MessageHeader{}
 		var unread, att int
 		if err := rows.Scan(&h.ID, &h.FolderID, &h.UID, &h.MessageID, &h.Subject,
-			&h.Sender, &h.SenderAddr, &h.Recipients, &h.Date, &unread, &att, &h.Size); err != nil {
+			&h.Sender, &h.SenderAddr, &h.Recipients, &h.Cc, &h.Date, &unread, &att, &h.Size); err != nil {
 			return nil, fmt.Errorf("baca pesan: %w", err)
 		}
 		h.Unread, h.HasAttachment = unread == 1, att == 1

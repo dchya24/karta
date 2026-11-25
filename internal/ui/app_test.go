@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -27,16 +28,30 @@ func testService(t *testing.T) *app.Service {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.EnsureFolder(accID, "Archive", "archive"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.EnsureFolder(accID, "Trash", "trash"); err != nil {
+		t.Fatal(err)
+	}
 	ms := []struct {
 		uid    int
 		subj   string
 		sender string
-	}{{1, "Salam pembuka", "Budi <budi@contoh.id>"}, {2, "Laporan mingguan", "Cici <cici@contoh.id>"}}
+		addr   string
+		to     string
+		cc     string
+		body   string
+	}{
+		{1, "Salam pembuka", "Budi <budi@contoh.id>", "budi@contoh.id", "a@contoh.id", "", "isi Salam pembuka"},
+		{2, "Laporan mingguan", "Cici <cici@contoh.id>", "cici@contoh.id", "a@contoh.id, dodi@contoh.id", "eko@contoh.id", "isi Laporan mingguan — lihat https://karta.dev/docs."},
+	}
 	for _, m := range ms {
 		if _, err := db.UpsertMessage(&store.MessageHeader{
 			FolderID: int(inbox), UID: m.uid, Subject: m.subj, Sender: m.sender,
-			SenderAddr: "x@" + m.sender, Date: fmt.Sprintf("2026-11-17T01:0%d:00Z", m.uid), Unread: true,
-		}, &store.MessageBody{PlainText: "isi " + m.subj}); err != nil {
+			SenderAddr: m.addr, Recipients: m.to, Cc: m.cc,
+			Date: fmt.Sprintf("2026-11-17T01:0%d:00Z", m.uid), Unread: true,
+		}, &store.MessageBody{PlainText: m.body}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -60,9 +75,12 @@ func TestViewBuilds(t *testing.T) {
 	if !tt.HasText("Salam pembuka") {
 		t.Fatal("subjek pesan tidak tampil di daftar")
 	}
-	// Reading pane: pesan terbaru terpilih otomatis (urutan date DESC).
-	if !tt.HasText("isi Laporan mingguan") {
+	// Reading pane: pesan terbaru terpilih otomatis (urutan date DESC) lewat richtext read-only.
+	if st.readerDoc == nil || !strings.Contains(st.readerDoc.Text().PlainText(), "isi Laporan mingguan") {
 		t.Fatal("reading pane tidak menampilkan isi pesan")
+	}
+	if !tt.HasText("Balas Semua") || !tt.HasText("Arsip") || !tt.HasText("Hapus") {
+		t.Fatal("toolbar aksi reading pane tidak lengkap")
 	}
 }
 
@@ -102,5 +120,53 @@ func TestViewSearch(t *testing.T) {
 	}
 	if !tt.HasText("Laporan mingguan") {
 		t.Fatal("hasil cari tidak tampil")
+	}
+}
+
+func TestLinkifyAndMailto(t *testing.T) {
+	txt := linkifyText("Cek https://karta.dev/docs. atau mailto:tim@karta.dev?subject=Halo!")
+	var links []string
+	for _, run := range txt.Runs(0, txt.Len()) {
+		if run.Attributes.Link != "" {
+			links = append(links, run.Attributes.Link)
+		}
+	}
+	if len(links) != 2 || links[0] != "https://karta.dev/docs" || links[1] != "mailto:tim@karta.dev?subject=Halo" {
+		t.Fatalf("links=%v", links)
+	}
+	to, subj := parseMailto("mailto:tim@karta.dev?subject=Halo%20Karta")
+	if to != "tim@karta.dev" || subj != "Halo Karta" {
+		t.Fatalf("mailto to=%q subj=%q", to, subj)
+	}
+}
+
+func TestReadingPaneHeadersReplyAllAndShortcuts(t *testing.T) {
+	st := &state{svc: testService(t)}
+	st.reloadFolders()
+	tt := ui.NewTester(st.view, 1100, 720)
+	if !tt.HasText("Cc: eko@contoh.id") {
+		t.Fatal("header Cc tidak tampil di reading pane")
+	}
+	// Shift+R → Balas Semua: To=pengirim, Cc=penerima lain tanpa akun sendiri.
+	tt.Key(ui.Shift, ui.KeyR)
+	if !st.composerOpen || st.composerMode != "reply_all" {
+		t.Fatalf("Shift+R gagal: open=%v mode=%q", st.composerOpen, st.composerMode)
+	}
+	if st.dTo != "cici@contoh.id" || st.dCc != "dodi@contoh.id, eko@contoh.id" {
+		t.Fatalf("reply_all to=%q cc=%q", st.dTo, st.dCc)
+	}
+	st.closeComposer()
+	tt.Frame()
+
+	// E → Arsipkan pesan terpilih (2 → 1 di INBOX).
+	tt.Key(0, ui.KeyE)
+	if len(st.msgs) != 1 || st.msgs[0].Subject != "Salam pembuka" {
+		t.Fatalf("shortcut E gagal arsip: %+v", st.msgs)
+	}
+
+	// / → Fokus ke kolom pencarian.
+	tt.Key(0, ui.KeySlash)
+	if !tt.Focused("Cari") {
+		t.Fatal("shortcut / tidak memfokuskan kolom pencarian")
 	}
 }

@@ -67,6 +67,9 @@ func TestHeaderFromFetch(t *testing.T) {
 	if h.Recipients != want {
 		t.Fatalf("recipients %q mau %q", h.Recipients, want)
 	}
+	if h.To != "aku@contoh.id" || h.Cc != "Cici <cici@x.id>" {
+		t.Fatalf("to=%q cc=%q", h.To, h.Cc)
+	}
 	if !h.Unread || !h.HasAttachment {
 		t.Fatalf("unread=%v attachment=%v", h.Unread, h.HasAttachment)
 	}

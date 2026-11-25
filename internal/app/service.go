@@ -47,6 +47,15 @@ type IMAPClient interface {
 	Close() error
 }
 
+type flagSetter interface {
+	SetSeen(ctx context.Context, mailbox string, uid uint32, seen bool) error
+}
+
+type messageMover interface {
+	MoveMessage(ctx context.Context, srcMailbox string, uid uint32, destMailbox string) (uint32, error)
+	DeleteMessage(ctx context.Context, mailbox string, uid uint32) error
+}
+
 // imapDial membuka koneksi IMAP; variabel agar test bisa menyetubnya.
 var imapDial = func(cfg mail.IMAPConfig) (IMAPClient, error) {
 	return mail.DialIMAP(cfg)
@@ -199,7 +208,7 @@ func (s *Service) PeekMessage(id int) (*Message, error) {
 		UID: h.UID, Subject: h.Subject, Sender: h.Sender,
 		SenderAddr: h.SenderAddr, Date: h.Date, Unread: h.Unread,
 		HasAttachment: h.HasAttachment},
-		To: h.Recipients, PlainText: b.PlainText, RawHTML: b.RawHTML, Fetched: b.Fetched}
+		To: h.Recipients, Cc: h.Cc, PlainText: b.PlainText, RawHTML: b.RawHTML, Fetched: b.Fetched}
 	atts, err := s.db.ListAttachments(int64(id))
 	if err == nil {
 		for _, a := range atts {
@@ -234,7 +243,7 @@ func (s *Service) GetMessage(ctx context.Context, id int) (*Message, error) {
 		UID: h.UID, Subject: h.Subject, Sender: h.Sender,
 		SenderAddr: h.SenderAddr, Date: h.Date, Unread: h.Unread,
 		HasAttachment: h.HasAttachment},
-		To: h.Recipients, PlainText: b.PlainText, RawHTML: b.RawHTML, Fetched: b.Fetched}
+		To: h.Recipients, Cc: h.Cc, PlainText: b.PlainText, RawHTML: b.RawHTML, Fetched: b.Fetched}
 	atts, err := s.db.ListAttachments(int64(id))
 	if err == nil {
 		for _, a := range atts {
@@ -298,9 +307,124 @@ func (s *Service) fetchAndStoreBody(ctx context.Context, id, folderID int64, uid
 	return nil
 }
 
-// MarkRead mengubah status baca pesan.
-func (s *Service) MarkRead(id int, read bool) error {
-	return s.db.MarkRead(int64(id), read)
+// MarkRead mengubah status baca pesan secara lokal lalu menyinkronkan flag
+// \Seen ke server IMAP (best-effort agar mode offline tetap berjalan).
+func (s *Service) MarkRead(ctx context.Context, id int, read bool) error {
+	if err := s.db.MarkRead(int64(id), read); err != nil {
+		return err
+	}
+	h, _, err := s.db.GetMessage(int64(id))
+	if err != nil || h.UID <= 0 {
+		return nil
+	}
+	folder, acc, err := s.messageLocation(int64(h.FolderID))
+	if err != nil {
+		return nil
+	}
+	cl, err := s.dialIMAP(ctx, acc)
+	if err != nil {
+		log.Printf("app: sync flag read pesan %d: %v", id, err)
+		return nil
+	}
+	defer cl.Close()
+	if fs, ok := cl.(flagSetter); ok {
+		if err := fs.SetSeen(ctx, folder.Name, uint32(h.UID), read); err != nil {
+			log.Printf("app: set \\Seen pesan %d: %v", id, err)
+		}
+	}
+	return nil
+}
+
+// Archive memindahkan pesan ke folder Archive akun (lokal + best-effort IMAP).
+func (s *Service) Archive(ctx context.Context, id int) error {
+	return s.moveToRole(ctx, id, "archive")
+}
+
+// Delete memindahkan pesan ke folder Trash; bila sudah di Trash, pesan dihapus
+// permanen beserta baris FTS-nya (lokal + best-effort IMAP).
+func (s *Service) Delete(ctx context.Context, id int) error {
+	h, _, err := s.db.GetMessage(int64(id))
+	if err != nil {
+		return err
+	}
+	folder, acc, err := s.messageLocation(int64(h.FolderID))
+	if err != nil {
+		return err
+	}
+	if folder.Role != "trash" {
+		return s.moveToRole(ctx, id, "trash")
+	}
+	if err := s.db.DeleteMessage(int64(id)); err != nil {
+		return err
+	}
+	if h.UID <= 0 {
+		return nil
+	}
+	cl, err := s.dialIMAP(ctx, acc)
+	if err != nil {
+		log.Printf("app: hapus IMAP pesan %d: %v", id, err)
+		return nil
+	}
+	defer cl.Close()
+	if mv, ok := cl.(messageMover); ok {
+		if err := mv.DeleteMessage(ctx, folder.Name, uint32(h.UID)); err != nil {
+			log.Printf("app: expunge IMAP pesan %d: %v", id, err)
+		}
+	}
+	return nil
+}
+
+func (s *Service) moveToRole(ctx context.Context, id int, role string) error {
+	h, _, err := s.db.GetMessage(int64(id))
+	if err != nil {
+		return err
+	}
+	src, acc, err := s.messageLocation(int64(h.FolderID))
+	if err != nil {
+		return err
+	}
+	if src.Role == role {
+		return nil
+	}
+	dst, err := s.db.FolderByRole(int64(acc.ID), role)
+	if err != nil {
+		return fmt.Errorf("folder %s tidak ditemukan: %w", role, err)
+	}
+	if err := s.db.MoveMessage(int64(id), int64(dst.ID), 0); err != nil {
+		return err
+	}
+	if h.UID <= 0 {
+		return nil
+	}
+	cl, err := s.dialIMAP(ctx, acc)
+	if err != nil {
+		log.Printf("app: pindah IMAP pesan %d ke %s: %v", id, role, err)
+		return nil
+	}
+	defer cl.Close()
+	if mv, ok := cl.(messageMover); ok {
+		newUID, err := mv.MoveMessage(ctx, src.Name, uint32(h.UID), dst.Name)
+		if err != nil {
+			log.Printf("app: MOVE IMAP pesan %d ke %s: %v", id, dst.Name, err)
+			return nil
+		}
+		if newUID > 0 {
+			_ = s.db.SetMessageUID(int64(id), newUID)
+		}
+	}
+	return nil
+}
+
+func (s *Service) messageLocation(folderID int64) (*store.Folder, store.Account, error) {
+	folder, err := s.db.FolderByID(folderID)
+	if err != nil {
+		return nil, store.Account{}, err
+	}
+	acc, err := s.accountByID(folder.AccountID)
+	if err != nil {
+		return nil, store.Account{}, err
+	}
+	return folder, acc, nil
 }
 
 // Refresh menyinkronkan semua akun: daftar folder, header baru folder inti.
@@ -391,9 +515,13 @@ func (s *Service) tryRefreshAccount(ctx context.Context, acc store.Account) erro
 			return fmt.Errorf("sync %s: %w", role, err)
 		}
 		for _, h := range headers {
+			recips := h.To
+			if recips == "" {
+				recips = h.Recipients
+			}
 			sh := store.MessageHeader{FolderID: int(folderID), UID: int(h.UID),
 				MessageID: h.MessageID, Subject: h.Subject,
-				Sender: h.Sender, SenderAddr: h.SenderAddr, Recipients: h.Recipients,
+				Sender: h.Sender, SenderAddr: h.SenderAddr, Recipients: recips, Cc: h.Cc,
 				Date: h.Date.UTC().Format(time.RFC3339), Unread: h.Unread,
 				HasAttachment: h.HasAttachment, Size: int(h.Size)}
 			if _, err := s.db.UpsertMessage(&sh, nil); err != nil {

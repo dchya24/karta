@@ -148,7 +148,7 @@ func TestMessageFlow(t *testing.T) {
 	if m.Unread {
 		t.Fatal("PeekMessage harus menandai terbaca")
 	}
-	if err := svc.MarkRead(m.ID, false); err != nil {
+	if err := svc.MarkRead(context.Background(), m.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := svc.Refresh(context.Background()); err != nil {
@@ -286,5 +286,103 @@ func TestAddAccountUpsert(t *testing.T) {
 	}
 	if svc.keyring.(*fakeKeyring).secret["karta/"+row.Email] != "pw2" {
 		t.Fatalf("keyring tidak terperbarui")
+	}
+}
+
+type actionStubIMAP struct {
+	stubIMAP
+	seenCalls   []struct{ box string; uid uint32; seen bool }
+	moveCalls   []struct{ src, dst string; uid uint32 }
+	deleteCalls []struct{ box string; uid uint32 }
+	nextDestUID uint32
+}
+
+func (s *actionStubIMAP) SetSeen(_ context.Context, mailbox string, uid uint32, seen bool) error {
+	s.seenCalls = append(s.seenCalls, struct{ box string; uid uint32; seen bool }{mailbox, uid, seen})
+	return nil
+}
+
+func (s *actionStubIMAP) MoveMessage(_ context.Context, src string, uid uint32, dst string) (uint32, error) {
+	s.moveCalls = append(s.moveCalls, struct{ src, dst string; uid uint32 }{src, dst, uid})
+	return s.nextDestUID, nil
+}
+
+func (s *actionStubIMAP) DeleteMessage(_ context.Context, mailbox string, uid uint32) error {
+	s.deleteCalls = append(s.deleteCalls, struct{ box string; uid uint32 }{mailbox, uid})
+	return nil
+}
+
+func TestMessageActionsAndCc(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	accID, err := svc.AddAccount(ctx, AccountConfig{
+		Email: "aku@contoh.id", Password: "pw",
+		IMAPHost: "imap.contoh.id", IMAPPort: 993, IMAPTLS: true,
+		SMTPHost: "smtp.contoh.id", SMTPPort: 465, SMTPTLS: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inbox, _ := svc.db.EnsureFolder(int64(accID), "INBOX", "inbox")
+	archive, _ := svc.db.EnsureFolder(int64(accID), "Archive", "archive")
+	trash, _ := svc.db.EnsureFolder(int64(accID), "Trash", "trash")
+
+	msgID, err := svc.db.UpsertMessage(&store.MessageHeader{
+		FolderID: int(inbox), UID: 10, Subject: "uji aksi",
+		Sender: "Budi <b@x.id>", SenderAddr: "b@x.id",
+		Recipients: "aku@contoh.id", Cc: "cici@x.id",
+		Date: "2026-11-17T01:00:00Z", Unread: true,
+	}, &store.MessageBody{PlainText: "isi aksi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stub := &actionStubIMAP{nextDestUID: 99}
+	old := imapDial
+	imapDial = func(cfg mail.IMAPConfig) (IMAPClient, error) { return stub, nil }
+	defer func() { imapDial = old }()
+
+	m, err := svc.PeekMessage(int(msgID))
+	if err != nil || m.Cc != "cici@x.id" {
+		t.Fatalf("PeekMessage Cc=%q err=%v", m.Cc, err)
+	}
+	if err := svc.MarkRead(ctx, int(msgID), false); err != nil {
+		t.Fatal(err)
+	}
+	if len(stub.seenCalls) != 1 || stub.seenCalls[0].seen != false || stub.seenCalls[0].uid != 10 {
+		t.Fatalf("SetSeen calls: %+v", stub.seenCalls)
+	}
+
+	// Archive: pindah INBOX -> Archive, UID diperbarui ke 99 dari IMAP.
+	if err := svc.Archive(ctx, int(msgID)); err != nil {
+		t.Fatal(err)
+	}
+	if len(stub.moveCalls) != 1 || stub.moveCalls[0].dst != "Archive" {
+		t.Fatalf("Archive move: %+v", stub.moveCalls)
+	}
+	msgs, _ := svc.ListMessages(int(archive), "")
+	if len(msgs) != 1 || msgs[0].UID != 99 {
+		t.Fatalf("pesan di Archive: %+v", msgs)
+	}
+
+	// Delete 1: pindah Archive -> Trash.
+	stub.nextDestUID = 105
+	if err := svc.Delete(ctx, int(msgID)); err != nil {
+		t.Fatal(err)
+	}
+	tMsgs, _ := svc.ListMessages(int(trash), "")
+	if len(tMsgs) != 1 || tMsgs[0].UID != 105 {
+		t.Fatalf("pesan di Trash: %+v", tMsgs)
+	}
+
+	// Delete 2 (sudah di Trash): hapus permanen + expunge IMAP.
+	if err := svc.Delete(ctx, int(msgID)); err != nil {
+		t.Fatal(err)
+	}
+	if len(stub.deleteCalls) != 1 || stub.deleteCalls[0].box != "Trash" || stub.deleteCalls[0].uid != 105 {
+		t.Fatalf("DeleteMessage calls: %+v", stub.deleteCalls)
+	}
+	if tMsgs, _ = svc.ListMessages(int(trash), ""); len(tMsgs) != 0 {
+		t.Fatalf("Trash harus kosong: %+v", tMsgs)
 	}
 }

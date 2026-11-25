@@ -36,6 +36,8 @@ type HeaderInfo struct {
 	Subject       string
 	Sender        string
 	SenderAddr    string
+	To            string
+	Cc            string
 	Recipients    string
 	Date          time.Time
 	Unread        bool
@@ -188,6 +190,68 @@ func (cl *Client) FetchRaw(ctx context.Context, mailbox string, uid uint32) ([]b
 	return data, nil
 }
 
+// SetSeen menyetel atau menghapus flag \Seen pada satu pesan di server IMAP.
+func (cl *Client) SetSeen(ctx context.Context, mailbox string, uid uint32, seen bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, err := cl.c.Select(mailbox, nil).Wait(); err != nil {
+		return fmt.Errorf("SELECT %s: %w", mailbox, err)
+	}
+	op := imap.StoreFlagsDel
+	if seen {
+		op = imap.StoreFlagsAdd
+	}
+	return cl.c.Store(imap.UIDSetNum(imap.UID(uid)), &imap.StoreFlags{
+		Op:     op,
+		Silent: true,
+		Flags:  []imap.Flag{imap.FlagSeen},
+	}, nil).Close()
+}
+
+// MoveMessage memindahkan pesan ke mailbox tujuan (MOVE atau fallback COPY+EXPUNGE)
+// dan mengembalikan UID baru di tujuan bila server melaporkannya.
+func (cl *Client) MoveMessage(ctx context.Context, srcMailbox string, uid uint32, destMailbox string) (uint32, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if _, err := cl.c.Select(srcMailbox, nil).Wait(); err != nil {
+		return 0, fmt.Errorf("SELECT %s: %w", srcMailbox, err)
+	}
+	data, err := cl.c.Move(imap.UIDSetNum(imap.UID(uid)), destMailbox).Wait()
+	if err != nil {
+		return 0, fmt.Errorf("MOVE %s uid=%d -> %s: %w", srcMailbox, uid, destMailbox, err)
+	}
+	if data != nil {
+		if set, ok := data.DestUIDs.(imap.UIDSet); ok && len(set) > 0 {
+			return uint32(set[0].Start), nil
+		}
+	}
+	return 0, nil
+}
+
+// DeleteMessage menandai pesan \Deleted lalu menjalankan EXPUNGE di mailbox.
+func (cl *Client) DeleteMessage(ctx context.Context, mailbox string, uid uint32) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, err := cl.c.Select(mailbox, nil).Wait(); err != nil {
+		return fmt.Errorf("SELECT %s: %w", mailbox, err)
+	}
+	set := imap.UIDSetNum(imap.UID(uid))
+	if err := cl.c.Store(set, &imap.StoreFlags{
+		Op:     imap.StoreFlagsAdd,
+		Silent: true,
+		Flags:  []imap.Flag{imap.FlagDeleted},
+	}, nil).Close(); err != nil {
+		return fmt.Errorf("STORE Deleted %s uid=%d: %w", mailbox, uid, err)
+	}
+	if cl.c.Caps().Has(imap.CapUIDPlus) {
+		return cl.c.UIDExpunge(set).Close()
+	}
+	return cl.c.Expunge().Close()
+}
+
 // mailboxRole menentukan peran folder dari special-use attribute, lalu
 // fallback nama standar, terakhir "other".
 func mailboxRole(name string, attrs []imap.MailboxAttr) string {
@@ -245,6 +309,8 @@ func headerFromFetch(m *imapclient.FetchMessageBuffer) HeaderInfo {
 		}
 		h.Subject = env.Subject
 		h.Sender, h.SenderAddr = formatAddrs(env.From)
+		h.To = joinAddrs(env.To)
+		h.Cc = joinAddrs(env.Cc)
 		h.Recipients = joinAddrs(append(append([]imap.Address{}, env.To...), env.Cc...))
 		if env.Date.After(m.InternalDate) {
 			h.Date = env.Date

@@ -139,3 +139,47 @@ func TestGetMessageMarkReadAndBody(t *testing.T) {
 		t.Fatalf("unread %d", folders[0].Unread)
 	}
 }
+
+func TestCcMoveAndDeleteMessage(t *testing.T) {
+	db := openTestDB(t)
+	accID, _ := db.AddAccount("a@contoh.id", "imap", 993, true, "smtp", 465, true, "")
+	inbox, _ := db.EnsureFolder(accID, "INBOX", "inbox")
+	archive, _ := db.EnsureFolder(accID, "Archive", "archive")
+
+	// Seed pesan lain di Archive dengan UID sama (7) untuk menguji anti-tabrakan UID.
+	if _, err := db.UpsertMessage(&MessageHeader{FolderID: int(archive), UID: 7,
+		Subject: "lama", Date: "2026-11-16T00:00:00Z"}, &MessageBody{PlainText: "lama"}); err != nil {
+		t.Fatal(err)
+	}
+	id, err := db.UpsertMessage(&MessageHeader{
+		FolderID: int(inbox), UID: 7, Subject: "rapat",
+		Recipients: "aku@contoh.id", Cc: "tim@contoh.id", Date: "2026-11-17T00:00:00Z",
+	}, &MessageBody{PlainText: "agenda"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Cc ikut terindeks FTS5.
+	hits, err := db.ListMessages(inbox, "tim")
+	if err != nil || len(hits) != 1 || hits[0].Cc != "tim@contoh.id" {
+		t.Fatalf("cari Cc: %+v err=%v", hits, err)
+	}
+	f, err := db.FolderByRole(accID, "archive")
+	if err != nil || int64(f.ID) != archive {
+		t.Fatalf("FolderByRole: %+v err=%v", f, err)
+	}
+	if err := db.MoveMessage(id, archive, 0); err != nil {
+		t.Fatal(err)
+	}
+	if inMsgs, _ := db.ListMessages(inbox, ""); len(inMsgs) != 0 {
+		t.Fatalf("inbox harus kosong: %+v", inMsgs)
+	}
+	if arMsgs, _ := db.ListMessages(archive, ""); len(arMsgs) != 2 {
+		t.Fatalf("archive harus berisi 2 pesan: %+v", arMsgs)
+	}
+	if err := db.DeleteMessage(id); err != nil {
+		t.Fatal(err)
+	}
+	if hits, _ := db.ListMessages(archive, "agenda"); len(hits) != 0 {
+		t.Fatalf("FTS harus terhapus: %+v", hits)
+	}
+}

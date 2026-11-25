@@ -59,6 +59,8 @@ var migrations = []string{
 	)`,
 	// v2: kolom metode autentikasi akun (password | oauth2).
 	`ALTER TABLE accounts ADD COLUMN auth TEXT NOT NULL DEFAULT 'password'`,
+	// v3: kolom Cc terpisah agar reading pane dan Reply All menampilkan Cc akurat.
+	`ALTER TABLE messages ADD COLUMN cc TEXT`,
 }
 
 // migrate menjalankan migrasi yang belum diterapkan, sekaligus memverifikasi

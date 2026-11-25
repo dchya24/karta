@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"log"
+	netmail "net/mail"
 	"strings"
 	"time"
 
@@ -13,10 +14,10 @@ import (
 	"karta/internal/app"
 )
 
-// composerForm menggambar form Compose/Reply/Forward (PRD §3.4).
+// composerForm menggambar form Compose/Reply/Reply All/Forward (PRD §3.4).
 func (s *state) composerForm(c *ui.Context) {
 	title := map[string]string{
-		"new": "Email Baru", "reply": "Balas", "forward": "Teruskan",
+		"new": "Email Baru", "reply": "Balas", "reply_all": "Balas Semua", "forward": "Teruskan",
 	}[s.composerMode]
 	ui.Text(c, title).Bold().FontSize(18)
 
@@ -94,11 +95,79 @@ func (s *state) openComposer(mode string) {
 		s.dTo = firstAddr(m.SenderAddr)
 		s.dSubject = rePrefix(m.Subject)
 		s.dBody = quote
+	case "reply_all":
+		s.dTo = firstAddr(m.SenderAddr)
+		s.dCc = replyAllCc(m.To, m.Cc, s.dTo, s.accountEmail(s.account))
+		s.dSubject = rePrefix(m.Subject)
+		s.dBody = quote
 	case "forward":
 		s.dSubject = fwdPrefix(m.Subject)
 		s.dBody = "----- Pesan diteruskan -----\nDari: " + m.Sender +
 			"\nSubjek: " + m.Subject + "\n\n" + m.PlainText
 	}
+}
+
+// openMailto membuka composer baru dengan tujuan dan subjek dari tautan mailto:.
+func (s *state) openMailto(raw string) {
+	s.openComposer("new")
+	s.dTo, s.dSubject = parseMailto(raw)
+}
+
+func (s *state) accountEmail(accID int) string {
+	for _, sec := range s.sections {
+		if sec.acc.ID == accID {
+			return sec.acc.Email
+		}
+	}
+	return ""
+}
+
+// replyAllCc mengumpulkan penerima lain dari To + Cc tanpa duplikat, tanpa
+// pengirim (yang sudah di To), dan tanpa alamat akun sendiri.
+func replyAllCc(origTo, origCc, excludeTo, selfEmail string) string {
+	seen := map[string]bool{}
+	for _, skip := range []string{excludeTo, selfEmail} {
+		if addr := bareAddr(skip); addr != "" {
+			seen[addr] = true
+		}
+	}
+	var out []string
+	for _, raw := range []string{origTo, origCc} {
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
+		if list, err := netmail.ParseAddressList(raw); err == nil {
+			for _, a := range list {
+				key := strings.ToLower(strings.TrimSpace(a.Address))
+				if key == "" || seen[key] {
+					continue
+				}
+				seen[key] = true
+				out = append(out, a.Address)
+			}
+			continue
+		}
+		for _, part := range strings.Split(raw, ",") {
+			addr := bareAddr(part)
+			if addr == "" || seen[addr] {
+				continue
+			}
+			seen[addr] = true
+			out = append(out, addr)
+		}
+	}
+	return strings.Join(out, ", ")
+}
+
+func bareAddr(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if a, err := netmail.ParseAddress(raw); err == nil {
+		return strings.ToLower(strings.TrimSpace(a.Address))
+	}
+	return strings.ToLower(raw)
 }
 
 // attachFiles memilih file via dialog native (main thread) lalu menambahkan.
