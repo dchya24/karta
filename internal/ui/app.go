@@ -35,6 +35,33 @@ func sectionKey(f app.Folder) string {
 	return strconv.Itoa(f.AccountID) + ":" + strconv.Itoa(f.ID)
 }
 
+// folderLabel menggeneralisasi nama folder di sidebar berdasarkan peran
+// standar (Inbox, Sent, Drafts, Archive, Spam, Trash) dan memangkas prefix
+// namespace server seperti "[Gmail]/" atau "[Google Mail]/".
+func folderLabel(f app.Folder) string {
+	switch f.Role {
+	case "inbox":
+		return "Inbox"
+	case "sent":
+		return "Sent"
+	case "drafts":
+		return "Drafts"
+	case "archive":
+		return "Archive"
+	case "junk":
+		return "Spam"
+	case "trash":
+		return "Trash"
+	}
+	name := f.Name
+	for _, p := range []string{"[Gmail]/", "[Google Mail]/", "INBOX.", "INBOX/"} {
+		if len(name) > len(p) && strings.EqualFold(name[:len(p)], p) {
+			return name[len(p):]
+		}
+	}
+	return name
+}
+
 type state struct {
 	svc       *app.Service
 	win       *mygo.Window
@@ -68,8 +95,10 @@ type state struct {
 	fSMTPPort   string
 	fIMAPTLS    bool
 
-	// pesan yang body-nya sedang diambil lazy (ID → berlangsung)
-	fetching map[int]bool
+	// pesan yang body-nya sedang diambil lazy (ID → berlangsung) & error per pesan
+	fetching     map[int]bool
+	fetchErr     map[int]string
+	reloginEmail string
 
 	// sinkronisasi manual
 	syncBusy bool
@@ -97,7 +126,7 @@ func SetReadyLogger(fn func()) { readyLogger = fn }
 // Run membuka window utama, memulai worker sinkronisasi, dan menjalankan
 // loop aplikasi sampai keluar.
 func Run(svc *app.Service) error {
-	st := &state{svc: svc, fetching: map[int]bool{}}
+	st := &state{svc: svc, fetching: map[int]bool{}, fetchErr: map[int]string{}}
 	switch loadPrefs().Appearance {
 	case "light":
 		st.theme = kartaTheme(false)
@@ -156,6 +185,7 @@ func (s *state) refreshNow() {
 			if err != nil {
 				s.syncMsg, s.syncFail = err.Error(), true
 				log.Printf("ui: refresh: %v", err)
+				s.handleErr("", err)
 				return
 			}
 			s.syncMsg, s.syncFail = "Sinkron " + time.Now().Format("15:04:05"), false
@@ -304,12 +334,30 @@ func (s *state) deleteAccount(acc app.Account) {
 }
 
 // fetchBodyLazy mengambil isi pesan di goroutine bila belum ter-cache.
+// Kegagalan dicatat di s.fetchErr[id] agar frame berikutnya tidak memicu
+// retry tak berujung saat token OAuth kedaluwarsa atau jaringan putus.
 func (s *state) fetchBodyLazy(id int) {
+	if s.fetching == nil {
+		s.fetching = map[int]bool{}
+	}
+	if s.fetchErr == nil {
+		s.fetchErr = map[int]string{}
+	}
 	if s.fetching[id] {
 		return
 	}
 	s.fetching[id] = true
+	delete(s.fetchErr, id)
 	win := s.win
+	if win == nil {
+		_, err := s.svc.GetMessage(context.Background(), id)
+		delete(s.fetching, id)
+		if err != nil {
+			s.fetchErr[id] = err.Error()
+			s.handleErr("Gagal ambil isi pesan: ", err)
+		}
+		return
+	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
@@ -318,7 +366,8 @@ func (s *state) fetchBodyLazy(id int) {
 			delete(s.fetching, id)
 			if err != nil {
 				log.Printf("ui: fetch body pesan %d: %v", id, err)
-				s.notify("Gagal ambil isi pesan: "+err.Error(), "error")
+				s.fetchErr[id] = err.Error()
+				s.handleErr("Gagal ambil isi pesan: ", err)
 			}
 		})
 	}()
@@ -330,6 +379,23 @@ func (s *state) notify(title, kind string) {
 		Title: title,
 		Type:  kind,
 	})
+}
+
+// handleErr mendeteksi OAuthReloginError untuk menampilkan toast aksi
+// "Login ulang" + banner re-auth; error lain ditampilkan sebagai toast biasa.
+func (s *state) handleErr(prefix string, err error) {
+	if email, ok := app.IsOAuthRelogin(err); ok {
+		s.reloginEmail = email
+		s.pendingToasts = append(s.pendingToasts, ui.Toast{
+			ID:       "relogin-" + email,
+			Title:    err.Error(),
+			Type:     "error",
+			Action:   "Login ulang",
+			OnAction: func() { s.loginGoogle() },
+		})
+		return
+	}
+	s.notify(prefix+err.Error(), "error")
 }
 
 // view adalah builder UI native; berjalan tiap frame di main thread.
@@ -398,7 +464,7 @@ func (s *state) view(c *ui.Context) {
 						acc, folders := sec.acc, sec.folders
 						ui.SidebarSection(c, acc.Email, nil, func() {
 							for _, f := range folders {
-								ui.SidebarItem(c, sectionKey(f), nil, f.Name).Children(func() {
+								ui.SidebarItem(c, sectionKey(f), nil, folderLabel(f)).Children(func() {
 									if f.Unread > 0 {
 										ui.Badge(c, strconv.Itoa(f.Unread))
 									}
@@ -415,6 +481,12 @@ func (s *state) view(c *ui.Context) {
 				}
 			} else {
 				ui.Text(c, "Belum ada akun.\nBuka menu ⋯ untuk menambah.").TextColor(t.TextMuted).Padding(16)
+			}
+			if s.reloginEmail != "" {
+				ui.Textf(c, "Sesi %s habis", s.reloginEmail).FontSize(11).PaddingX(10).TextColor(t.Danger)
+				if ui.Button(c, "Login ulang Google").Label("Login ulang " + s.reloginEmail).MarginX(10).Clicked() && !s.oauthBusy {
+					s.loginGoogle()
+				}
 			}
 			syncLabel := "Sinkronkan"
 			if s.syncBusy {
@@ -536,6 +608,9 @@ func (s *state) loginGoogle() {
 				}
 				s.account = id
 				s.showAccount = false
+				s.reloginEmail = ""
+				clear(s.fetchErr)
+				s.notify("Login Google "+email+" berhasil", "success")
 				s.reloadFolders()
 				s.refreshNow()
 			})
@@ -616,6 +691,22 @@ func (s *state) readingPane(c *ui.Context) {
 		s.syncSeenAsync(m.ID, true)
 	}
 	if !m.Fetched {
+		if errMsg, failed := s.fetchErr[id]; failed {
+			ui.Textf(c, "%s", m.Subject).Bold().FontSize(18)
+			ui.Textf(c, "Gagal memuat isi pesan: %s", errMsg).TextColor(t.Danger)
+			ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
+				if s.reloginEmail != "" {
+					if ui.Button(c, "Login ulang Google").Clicked() && !s.oauthBusy {
+						s.loginGoogle()
+					}
+				}
+				if ui.Button(c, "Coba lagi").Clicked() {
+					delete(s.fetchErr, id)
+					s.fetchBodyLazy(id)
+				}
+			})
+			return
+		}
 		ui.Text(c, "Mengambil isi dari server…").TextColor(t.TextMuted)
 		s.fetchBodyLazy(id)
 		return
@@ -716,7 +807,7 @@ func (s *state) runAction(okToast string, op func(context.Context) error) {
 	win := s.win
 	if win == nil {
 		if err := op(context.Background()); err != nil {
-			s.notify(err.Error(), "error")
+			s.handleErr("", err)
 			return
 		}
 		if okToast != "" {
@@ -731,7 +822,7 @@ func (s *state) runAction(okToast string, op func(context.Context) error) {
 		err := op(ctx)
 		win.Update(func() {
 			if err != nil {
-				s.notify(err.Error(), "error")
+				s.handleErr("", err)
 				log.Printf("ui: aksi pesan: %v", err)
 				return
 			}

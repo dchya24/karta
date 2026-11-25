@@ -280,16 +280,22 @@ func mailboxRole(name string, attrs []imap.MailboxAttr) string {
 		return "archive"
 	}
 	n := strings.ToLower(name)
+	for _, p := range []string{"[gmail]/", "[google mail]/", "inbox.", "inbox/"} {
+		if strings.HasPrefix(n, p) {
+			n = n[len(p):]
+			break
+		}
+	}
 	switch n {
 	case "inbox":
 		return "inbox"
-	case "sent", "sent messages", "sent items", "terkirim":
+	case "sent", "sent messages", "sent items", "sent mail", "terkirim":
 		return "sent"
 	case "drafts", "draf", "konsep":
 		return "drafts"
 	case "trash", "deleted messages", "deleted items", "sampah", "tempat sampah":
 		return "trash"
-	case "archive", "arsip":
+	case "archive", "all mail", "arsip":
 		return "archive"
 	case "junk", "spam":
 		return "junk"

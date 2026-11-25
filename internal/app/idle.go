@@ -49,9 +49,15 @@ func (s *Service) watchAccount(ctx context.Context, acc store.Account, onEvent f
 		cfg, err := s.imapConfig(ctx, acc)
 		if err != nil {
 			log.Printf("app: idle %s kredensial: %v", acc.Email, err)
+			if _, ok := IsOAuthRelogin(err); ok {
+				return
+			}
 		} else {
 			err = imapIdle(ctx, cfg, "INBOX", onEvent)
 			if err == nil || ctx.Err() != nil {
+				return
+			}
+			if _, ok := IsOAuthRelogin(err); ok {
 				return
 			}
 			if errors.Is(err, mail.ErrIdleUnsupported) {

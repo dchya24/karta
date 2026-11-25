@@ -51,17 +51,16 @@ func (s *Service) SendDraft(ctx context.Context, accountID int, d Draft) error {
 		return fmt.Errorf("penerima (To) kosong")
 	}
 	out := outgoingFromDraft(acc.Email, d)
-	secret, err := s.getPassword(acc.Email)
-	if err != nil {
-		return err
-	}
 	method := mail.AuthPassword
+	var secret string
 	if acc.Auth == "oauth2" {
 		method = mail.AuthOAuth2
 		secret, err = s.oauthToken(ctx, acc.Email)
-		if err != nil {
-			return err
-		}
+	} else {
+		secret, err = s.getPassword(acc.Email)
+	}
+	if err != nil {
+		return err
 	}
 	if err := mail.SendMail(mail.SMTPConfig{Host: acc.SMTPHost, Port: acc.SMTPPort,
 		TLS: acc.SMTPTLS, User: acc.Email, Pass: secret, Auth: method}, out); err != nil {

@@ -148,6 +148,7 @@ func (s *Service) RemoveAccount(_ context.Context, id int) error {
 				err != keyring.ErrNotFound {
 				return fmt.Errorf("hapus kredensial %s: %w", a.Email, err)
 			}
+			_ = s.keyring.Delete(oauthKeyringService, a.Email)
 		}
 	}
 	return s.db.DeleteAccount(int64(id))
@@ -428,19 +429,25 @@ func (s *Service) messageLocation(folderID int64) (*store.Folder, store.Account,
 }
 
 // Refresh menyinkronkan semua akun: daftar folder, header baru folder inti.
-// Gagal satu akun tidak menghentikan akun lain.
+// Gagal satu akun tidak menghentikan akun lain; bila ada akun yang token
+// OAuth-nya kedaluwarsa (OAuthReloginError), error tersebut dikembalikan agar
+// UI dapat menawarkan login ulang.
 func (s *Service) Refresh(ctx context.Context) error {
 	accs, err := s.db.ListAccounts()
 	if err != nil {
 		return err
 	}
+	var reloginErr error
 	for _, acc := range accs {
 		ac := acc
 		if err := s.refreshAccount(ctx, ac); err != nil {
 			log.Printf("app: sync %s: %v", ac.Email, err)
+			if _, ok := IsOAuthRelogin(err); ok && reloginErr == nil {
+				reloginErr = err
+			}
 		}
 	}
-	return nil
+	return reloginErr
 }
 
 // coreRoles adalah folder yang disinkron otomatis (PRD §3.2).

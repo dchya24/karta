@@ -28,10 +28,13 @@ func testService(t *testing.T) *app.Service {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.EnsureFolder(accID, "Archive", "archive"); err != nil {
+	if _, err := db.EnsureFolder(accID, "[Gmail]/All Mail", "archive"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.EnsureFolder(accID, "Trash", "trash"); err != nil {
+	if _, err := db.EnsureFolder(accID, "[Gmail]/Trash", "trash"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.EnsureFolder(accID, "[Gmail]/Important", "other"); err != nil {
 		t.Fatal(err)
 	}
 	ms := []struct {
@@ -69,8 +72,8 @@ func TestViewBuilds(t *testing.T) {
 	if !tt.HasText("Karta") {
 		t.Fatal("judul Karta tidak tampil")
 	}
-	if !tt.HasText("INBOX") {
-		t.Fatal("folder INBOX tidak tampil di sidebar")
+	if !tt.HasText("Inbox") {
+		t.Fatal("folder Inbox tidak tampil di sidebar")
 	}
 	if !tt.HasText("Salam pembuka") {
 		t.Fatal("subjek pesan tidak tampil di daftar")
@@ -81,6 +84,9 @@ func TestViewBuilds(t *testing.T) {
 	}
 	if !tt.HasText("Balas Semua") || !tt.HasText("Arsip") || !tt.HasText("Hapus") {
 		t.Fatal("toolbar aksi reading pane tidak lengkap")
+	}
+	if !tt.HasText("Archive") || !tt.HasText("Trash") || !tt.HasText("Important") || tt.HasText("[Gmail]") {
+		t.Fatal("nama folder [Gmail]/ harus digeneralisasi di sidebar")
 	}
 }
 
@@ -172,5 +178,46 @@ func TestReadingPaneHeadersReplyAllAndShortcuts(t *testing.T) {
 	tt.Key(0, ui.KeySlash)
 	if !tt.Focused("Cari") {
 		t.Fatal("shortcut / tidak memfokuskan kolom pencarian")
+	}
+}
+
+func TestOAuthReloginStopsInfiniteLazyFetch(t *testing.T) {
+	db, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	accID, _ := db.AddAccount("uji-oauth-expired@contoh.id", "imap.gmail.com", 993, true, "smtp.gmail.com", 465, true, "oauth2")
+	inbox, _ := db.EnsureFolder(accID, "INBOX", "inbox")
+	// Pesan belum ter-fetch (body nil → fetched=0).
+	msgID, err := db.UpsertMessage(&store.MessageHeader{
+		FolderID: int(inbox), UID: 47, Subject: "Perlu fetch",
+		Sender: "Google <no-reply@google.com>", SenderAddr: "no-reply@google.com",
+		Date: "2026-11-25T14:51:00Z", Unread: true,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := app.New(db)
+	t.Cleanup(func() { svc.Close() })
+
+	st := &state{svc: svc, fetching: map[int]bool{}, fetchErr: map[int]string{}}
+	st.reloadFolders()
+
+	// Frame 1 memicu fetchBodyLazy sekali → gagal dengan OAuthReloginError;
+	// Frame 2 menampilkan tombol Login ulang Google & Coba lagi tanpa retry loop.
+	tt := ui.NewTester(st.view, 1100, 720)
+	tt.Frame()
+	if st.reloginEmail != "uji-oauth-expired@contoh.id" {
+		t.Fatalf("reloginEmail=%q", st.reloginEmail)
+	}
+	if st.fetchErr[int(msgID)] == "" {
+		t.Fatal("fetchErr harus tercatat agar tidak loop")
+	}
+	if !tt.HasText("Login ulang Google") || !tt.HasText("Coba lagi") {
+		t.Fatal("tombol Login ulang Google / Coba lagi tidak tampil saat sesi kedaluwarsa")
+	}
+	if st.fetching[int(msgID)] {
+		t.Fatal("fetchBodyLazy tidak boleh dipanggil berulang setelah gagal")
 	}
 }

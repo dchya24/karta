@@ -33,6 +33,9 @@ func TestMailboxRoleByName(t *testing.T) {
 		"INBOX": "inbox", "Sent": "sent", "Terkirim": "sent",
 		"Trash": "trash", "Sampah": "trash", "Archive": "archive",
 		"Junk": "junk", "Spam": "junk", "Proyek/Klien": "other",
+		"[Gmail]/Sent Mail": "sent", "[Gmail]/All Mail": "archive",
+		"[Gmail]/Drafts": "drafts", "[Gmail]/Trash": "trash",
+		"[Gmail]/Spam": "junk", "[Gmail]/Important": "other",
 	}
 	for name, want := range cases {
 		if got := mailboxRole(name, nil); got != want {

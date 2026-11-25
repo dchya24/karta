@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"runtime"
 
-	"karta/internal/mail"
 	"karta/internal/store"
 )
 
@@ -69,21 +68,9 @@ func fixedOrFreePort(preferred int) (int, error) {
 // dialIMAP membuka koneksi IMAP akun sesuai metode autentikasinya:
 // password (keyring) atau OAuth2 (token keyring + refresh otomatis).
 func (s *Service) dialIMAP(ctx context.Context, acc store.Account) (IMAPClient, error) {
-	secret, err := s.getPassword(acc.Email)
+	cfg, err := s.imapConfig(ctx, acc)
 	if err != nil {
 		return nil, err
 	}
-	method := mail.AuthPassword
-	if acc.Auth == "oauth2" {
-		method = mail.AuthOAuth2
-		if secret, err = s.oauthToken(ctx, acc.Email); err != nil {
-			return nil, err
-		}
-	}
-	cl, err := imapDial(mail.IMAPConfig{Host: acc.IMAPHost, Port: acc.IMAPPort,
-		TLS: acc.IMAPTLS, User: acc.Email, Pass: secret, Auth: method})
-	if err != nil {
-		return nil, err
-	}
-	return cl, nil
+	return imapDial(cfg)
 }

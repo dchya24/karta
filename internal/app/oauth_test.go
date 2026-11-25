@@ -224,3 +224,15 @@ func TestOAuthWaitCallback(t *testing.T) {
 		t.Fatalf("halaman sukses tidak tampil: %s", body)
 	}
 }
+
+func TestOAuthReloginErrorDetection(t *testing.T) {
+	rawErr := fmt.Errorf(`oauth2: "invalid_grant" "Token has been expired or revoked."`)
+	if !isOAuthTokenRevoked(rawErr) {
+		t.Fatal("invalid_grant harus terdeteksi sebagai token revoked")
+	}
+	wrapped := fmt.Errorf("fetch body: %w", &OAuthReloginError{Email: "devdinar05@gmail.com", Err: rawErr})
+	email, ok := IsOAuthRelogin(wrapped)
+	if !ok || email != "devdinar05@gmail.com" {
+		t.Fatalf("IsOAuthRelogin: ok=%v email=%q", ok, email)
+	}
+}

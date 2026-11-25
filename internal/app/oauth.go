@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -13,9 +14,49 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zalando/go-keyring"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 )
+
+// OAuthReloginError menandakan refresh token OAuth sudah kedaluwarsa atau
+// dicabut (mis. invalid_grant setelah >7 hari pada mode Testing Google)
+// sehingga pengguna harus login ulang via browser.
+type OAuthReloginError struct {
+	Email string
+	Err   error
+}
+
+func (e *OAuthReloginError) Error() string {
+	return fmt.Sprintf("sesi Google %s kedaluwarsa — silakan login ulang", e.Email)
+}
+
+func (e *OAuthReloginError) Unwrap() error { return e.Err }
+
+// IsOAuthRelogin memeriksa apakah err menuntut login ulang OAuth dan
+// mengembalikan alamat email akun terkait.
+func IsOAuthRelogin(err error) (string, bool) {
+	var re *OAuthReloginError
+	if errors.As(err, &re) {
+		return re.Email, true
+	}
+	return "", false
+}
+
+func isOAuthTokenRevoked(err error) bool {
+	if err == nil {
+		return false
+	}
+	var retErr *oauth2.RetrieveError
+	if errors.As(err, &retErr) {
+		switch retErr.ErrorCode {
+		case "invalid_grant", "unauthorized_client", "invalid_client":
+			return true
+		}
+	}
+	s := err.Error()
+	return strings.Contains(s, "invalid_grant") || strings.Contains(s, "Token has been expired or revoked")
+}
 
 // oauthScope adalah scope Gmail (IMAP + SMTP XOAUTH2); openid+email
 // menyertakan id_token agar email akun terdeteksi otomatis dari login.
@@ -189,11 +230,14 @@ func (s *Service) saveOAuthToken(email string, tok *oauth2.Token) error {
 func (s *Service) oauthToken(ctx context.Context, email string) (string, error) {
 	raw, err := s.keyring.Get(oauthKeyringService, email)
 	if err != nil {
+		if errors.Is(err, keyring.ErrNotFound) {
+			return "", &OAuthReloginError{Email: email, Err: err}
+		}
 		return "", fmt.Errorf("token OAuth %s tidak ada: %w", email, err)
 	}
 	var tok oauth2.Token
 	if err := json.Unmarshal([]byte(raw), &tok); err != nil {
-		return "", fmt.Errorf("baca token %s: %w", email, err)
+		return "", &OAuthReloginError{Email: email, Err: err}
 	}
 	clientID, secret, err := s.oauthConfig()
 	if err != nil {
@@ -203,8 +247,10 @@ func (s *Service) oauthToken(ctx context.Context, email string) (string, error) 
 	src := conf.TokenSource(ctx, &tok)
 	fresh, err := src.Token()
 	if err != nil {
-		// invalid_grant dsb = permanen, user harus login ulang.
-		return "", fmt.Errorf("perbarui token %s: %w (login ulang via OAuth)", email, err)
+		if isOAuthTokenRevoked(err) {
+			return "", &OAuthReloginError{Email: email, Err: err}
+		}
+		return "", fmt.Errorf("perbarui token %s: %w", email, err)
 	}
 	if fresh.AccessToken != tok.AccessToken {
 		if err := s.saveOAuthToken(email, fresh); err != nil {
