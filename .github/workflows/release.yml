@@ -70,6 +70,8 @@ jobs:
           mkdir -p $topdir/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
           for pair in amd64:x86_64 arm64:aarch64; do
             goarch=${pair%:*}; rpmarch=${pair#*:}
+            cp packaging/karta.desktop assets/icons/karta_512.png $topdir/SOURCES/
+            cp dist/karta-linux-$goarch $topdir/SOURCES/
             rpmbuild -bb --define "_topdir $topdir" --define "_version $VER" \
               --define "_bindir_src $PWD/dist/karta-linux-$goarch" \
               --define "_desktop_src $PWD/packaging/karta.desktop" \
