@@ -448,6 +448,14 @@ func (s *state) view(c *ui.Context) {
 		return
 	}
 
+	// Welcome: belum ada akun sama sekali → layar sambutan penuh alih-alih
+	// 3-pane kosong yang terasa rusak. Kondisi ini deterministik (0 akun),
+	// tidak perlu flag onboarding yang dipersist.
+	if len(s.sections) == 0 {
+		s.welcome(c)
+		return
+	}
+
 	ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {
 		// Pane 1: sidebar akun + folder + unread.
 		ui.Column(c).Width(240).Shrink(0).PaddingY(12).Gap(6).Background(t.Surface).Children(func() {
@@ -553,6 +561,20 @@ func (s *state) view(c *ui.Context) {
 	})
 
 	s.deleteAccountModal(c)
+}
+
+// welcome menggambar layar sambutan pertama kali: logo, nama app, tagline,
+// dan tombol utama "Tambah akun" yang membuka form akun layar penuh.
+func (s *state) welcome(c *ui.Context) {
+	t := c.Theme()
+	ui.Column(c).Fill().Center().Gap(14).Children(func() {
+		ui.Image(c, kartaLogo).Size(72, 72)
+		ui.Text(c, "Karta").Bold().FontSize(28)
+		ui.Text(c, "Email client native. Cepat, tenang, teks-first.").TextColor(t.TextMuted)
+		if ui.Button(c, "Tambah akun").Label("Tambah akun pertama").Clicked() {
+			s.showAccount = true
+		}
+	})
 }
 
 // deleteAccountModal menampilkan konfirmasi hapus akun sebagai modal native
@@ -950,7 +972,7 @@ func (s *state) adjustFolderUnread(folderID, delta int) {
 
 // shortcuts memasang navigasi keyboard PRD §3.5.
 func (s *state) shortcuts(c *ui.Context) {
-	if s.composerOpen || s.showAccount || c.FocusTakesText() {
+	if s.composerOpen || s.showAccount || len(s.sections) == 0 || c.FocusTakesText() {
 		return
 	}
 	if c.Shortcut(0, ui.KeyDown) || c.Shortcut(0, ui.KeyJ) {
