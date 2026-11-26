@@ -253,9 +253,11 @@ func (s *state) reloadFolders() {
 	s.reloadMessages()
 }
 
-// reloadMessages memuat daftar pesan folder terpilih + filter query.
+// reloadMessages memuat daftar percakapan folder terpilih + filter query.
+// Tanpa query: satu baris per thread (pesan terbarunya) dengan jumlah anggota.
+// Dengan query: hasil pencarian flat per pesan (ListThreads delegasi FTS).
 func (s *state) reloadMessages() {
-	msgs, err := s.svc.ListMessages(s.folder, s.query)
+	msgs, err := s.svc.ListThreads(s.folder, s.query)
 	if err != nil {
 		log.Printf("ui: pesan: %v", err)
 		return
@@ -718,6 +720,14 @@ func (s *state) row(c *ui.Context, i int) {
 				subjectText.TextColor(t.TextMuted)
 			}
 		})
+		// Baris thread: badge jumlah anggota percakapan (baris = pesan
+		// terbarunya, jadi tanggal baris otomatis pesan terbaru).
+		if m.ThreadCount > 1 {
+			badge := ui.Badge(c, strconv.Itoa(m.ThreadCount))
+			if chosen {
+				badge.TextColor(t.AccentText)
+			}
+		}
 		if m.Date != "" {
 			dateText := ui.Textf(c, "%s", shortDate(m.Date)).FontSize(11).Shrink(0)
 			if chosen {
