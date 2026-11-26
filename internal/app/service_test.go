@@ -7,34 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zalando/go-keyring"
 
 	"karta/internal/mail"
 	"karta/internal/store"
 )
 
-// fakeKeyring mencatat kredensial di memori untuk test tanpa OS keyring.
-type fakeKeyring struct {
-	secret map[string]string
-}
-
-func (f *fakeKeyring) Set(service, user, password string) error {
-	f.secret[service+"/"+user] = password
-	return nil
-}
-
-func (f *fakeKeyring) Get(service, user string) (string, error) {
-	pw, ok := f.secret[service+"/"+user]
-	if !ok {
-		return "", keyring.ErrNotFound
-	}
-	return pw, nil
-}
-
-func (f *fakeKeyring) Delete(service, user string) error {
-	delete(f.secret, service+"/"+user)
-	return nil
-}
 
 func newTestService(t *testing.T) *Service {
 	t.Helper()

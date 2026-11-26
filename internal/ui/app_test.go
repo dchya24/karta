@@ -199,6 +199,7 @@ func TestOAuthReloginStopsInfiniteLazyFetch(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := app.New(db)
+	svc.SetKeyringForTesting(app.NewFakeKeyring())
 	t.Cleanup(func() { svc.Close() })
 
 	st := &state{svc: svc, fetching: map[int]bool{}, fetchErr: map[int]string{}}

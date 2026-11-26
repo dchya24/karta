@@ -76,6 +76,41 @@ func New(db *store.DB) *Service {
 	return &Service{db: db, keyring: osKeyring{}}
 }
 
+// SetKeyringForTesting mengganti penyimpanan kredensial (khusus test
+// yang tidak punya OS keyring, mis. runner CI tanpa gnome-keyring).
+func (s *Service) SetKeyringForTesting(cs credentialStore) {
+	s.keyring = cs
+}
+
+// NewFakeKeyring membuat penyimpanan kredensial di memori untuk test
+// (dipakai bersama paket ui via SetKeyringForTesting).
+func NewFakeKeyring() credentialStore {
+	return &fakeKeyring{secret: map[string]string{}}
+}
+
+// fakeKeyring mengimplementasikan credentialStore di memori.
+type fakeKeyring struct {
+	secret map[string]string
+}
+
+func (f *fakeKeyring) Set(service, user, password string) error {
+	f.secret[service+"/"+user] = password
+	return nil
+}
+
+func (f *fakeKeyring) Get(service, user string) (string, error) {
+	pw, ok := f.secret[service+"/"+user]
+	if !ok {
+		return "", keyring.ErrNotFound
+	}
+	return pw, nil
+}
+
+func (f *fakeKeyring) Delete(service, user string) error {
+	delete(f.secret, service+"/"+user)
+	return nil
+}
+
 // Close menutup resource service.
 func (s *Service) Close() error { return s.db.Close() }
 
