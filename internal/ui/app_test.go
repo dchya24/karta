@@ -20,6 +20,10 @@ func testService(t *testing.T) *app.Service {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
+	svc := app.New(db)
+	// Runner CI tak punya keyring daemon — pakai fake agar semua operasi
+	// kredensial (tambah/hapus akun) jalan.
+	svc.SetKeyringForTesting(app.NewFakeKeyring())
 	accID, err := db.AddAccount("a@contoh.id", "imap", 993, true, "smtp", 465, true, "")
 	if err != nil {
 		t.Fatal(err)
@@ -58,7 +62,6 @@ func testService(t *testing.T) *app.Service {
 			t.Fatal(err)
 		}
 	}
-	svc := app.New(db)
 	t.Cleanup(func() { svc.Close() })
 	return svc
 }
