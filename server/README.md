@@ -69,7 +69,7 @@ Image final memakai distroless/static, non-root.
 
 ## Deploy (placeholder)
 
-Rencana rilis: satu instance kecil di belakang reverse proxy TLS (`https://auth.karta.dchya24.dev` — sudah jadi default di `internal/app/oauthrelay.go`), mis. di VPS dengan Caddy/nginx sebagai terminator TLS. Reverse proxy diharapkan meneruskan `X-Forwarded-For` agar rate limit per IP berfungsi. Layanan ini stateless dan single-binary, sehingga cukup dijalankan sebagai systemd unit atau container (compose):
+Rencana rilis: satu instance kecil di belakang reverse proxy TLS (`https://karta.devchya.id` — sudah jadi default di `internal/app/oauthrelay.go`), mis. di VPS dengan Caddy/nginx sebagai terminator TLS. Reverse proxy diharapkan meneruskan `X-Forwarded-For` agar rate limit per IP berfungsi. Layanan ini stateless dan single-binary, sehingga cukup dijalankan sebagai systemd unit atau container (compose):
 
 ```yaml
 services:

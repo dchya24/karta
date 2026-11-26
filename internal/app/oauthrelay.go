@@ -19,7 +19,7 @@ import (
 // oauthRelayDefault adalah alamat BE relay OAuth yang menyimpan
 // client_secret. Ganti (atau set env KARTA_OAUTH_RELAY) sebelum rilis
 // publik bila BE dipasang di domain lain.
-const oauthRelayDefault = "https://auth.karta.dchya24.dev"
+const oauthRelayDefault = "https://karta.devchya.id"
 
 func relayBase() string {
 	if u := strings.TrimSpace(os.Getenv("KARTA_OAUTH_RELAY")); u != "" {
