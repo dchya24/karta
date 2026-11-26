@@ -222,3 +222,34 @@ func TestOAuthReloginStopsInfiniteLazyFetch(t *testing.T) {
 		t.Fatal("fetchBodyLazy tidak boleh dipanggil berulang setelah gagal")
 	}
 }
+
+// TestDeleteAccountModal memastikan konfirmasi hapus akun pakai modal native
+// mygo/ui (bukan dialog OS) dan eksekusi hapus bekerja.
+func TestDeleteAccountModal(t *testing.T) {
+	svc := testService(t)
+	st := &state{svc: svc, fetching: map[int]bool{}}
+	st.reloadFolders()
+	acc := st.sections[0].acc
+	tt := ui.NewTester(st.view, 1100, 720)
+	tt.Frame()
+
+	st.deleteAccount(acc)
+	tt.Frame()
+	if !tt.HasText("Hapus akun " + acc.Email + "?") {
+		t.Fatal("modal konfirmasi hapus tidak tampil")
+	}
+	if err := tt.Click("Hapus akun " + acc.Email); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if st.delAccOpen {
+		t.Fatal("modal harus tertutup setelah konfirmasi")
+	}
+	accs, err := svc.ListAccounts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(accs) != 0 {
+		t.Fatalf("akun tersisa %d, mau 0", len(accs))
+	}
+}

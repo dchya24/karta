@@ -101,6 +101,8 @@ type state struct {
 	fetchErr     map[int]string
 	reloginEmail string
 	lastSyncErr  string // teks error sinkron latar terakhir, agar toast tidak dobel
+	oauthFlow    int    // penomoran flow OAuth; klik ulang membatalkan flow lama
+	oauthCancel  context.CancelFunc
 
 	// sinkronisasi manual
 	syncBusy bool
@@ -109,6 +111,10 @@ type state struct {
 
 	// tema; nil = ikut penampilan sistem
 	theme *ui.Theme
+
+	// modal konfirmasi hapus akun (native mygo/ui, bukan dialog OS)
+	delAcc     app.Account // akun yang menunggu konfirmasi
+	delAccOpen bool
 
 	// composer
 	composerOpen              bool
@@ -322,22 +328,17 @@ func (s *state) switchTo(accID int) {
 	}
 }
 
-// deleteAccount meminta konfirmasi lalu menghapus akun (pesan tersinkron ikut
-// terhapus dari perangkat; kredensial keyring juga dibersihkan).
+// deleteAccount membuka modal konfirmasi hapus akun (native mygo/ui,
+// bukan dialog OS). Eksekusi hapus di confirmDeleteAccount.
 func (s *state) deleteAccount(acc app.Account) {
-	res, err := mygo.Dialog.Message(mygo.MessageOptions{
-		Parent:  s.win,
-		Title:   "Hapus akun",
-		Message: "Hapus akun " + acc.Email + "?",
-		Detail: "Folder dan pesan yang tersinkron dihapus dari perangkat ini; " +
-			"isi kotak surat tetap aman di server. Kredensial di Keyring ikut dihapus.",
-		Buttons:            []string{"Hapus", "Batal"},
-		CancelButton:       1,
-		DestructiveButtons: []int{0},
-	})
-	if err != nil || res.Button != 0 {
-		return
-	}
+	s.delAcc, s.delAccOpen = acc, true
+}
+
+// confirmDeleteAccount menghapus akun setelah user konfirmasi di modal
+// (pesan tersinkron ikut terhapus dari perangkat; kredensial keyring dibersihkan).
+func (s *state) confirmDeleteAccount() {
+	acc := s.delAcc
+	s.delAcc, s.delAccOpen = app.Account{}, false
 	if err := s.svc.RemoveAccount(context.Background(), acc.ID); err != nil {
 		log.Printf("ui: hapus akun %s: %v", acc.Email, err)
 		s.notify("Gagal hapus akun: "+err.Error(), "error")
@@ -500,7 +501,7 @@ func (s *state) view(c *ui.Context) {
 			}
 			if s.reloginEmail != "" {
 				ui.Textf(c, "Sesi %s habis", s.reloginEmail).FontSize(11).PaddingX(10).TextColor(t.Danger)
-				if ui.Button(c, "Login ulang Google").Label("Login ulang "+s.reloginEmail).MarginX(10).Clicked() && !s.oauthBusy {
+				if ui.Button(c, "Login ulang Google").Label("Login ulang " + s.reloginEmail).MarginX(10).Clicked() {
 					s.loginGoogle()
 				}
 			}
@@ -548,6 +549,36 @@ func (s *state) view(c *ui.Context) {
 			})
 		}).Grow(1)
 	})
+
+	s.deleteAccountModal(c)
+}
+
+// deleteAccountModal menampilkan konfirmasi hapus akun sebagai modal native
+// mygo/ui (tema ikut aplikasi), bukan dialog bawaan OS.
+func (s *state) deleteAccountModal(c *ui.Context) {
+	if !s.delAccOpen {
+		s.delAcc = app.Account{}
+		return
+	}
+	t := c.Theme()
+	ui.Modal(c, &s.delAccOpen, func() {
+		acc := s.delAcc
+		ui.Column(c).Width(420).Padding(20, 24).Gap(12).Children(func() {
+			ui.Text(c, "Hapus akun").Bold().FontSize(16)
+			ui.Textf(c, "Hapus akun %s?", acc.Email).FontSize(13)
+			ui.Text(c, "Folder dan pesan yang tersinkron dihapus dari perangkat ini; "+
+				"isi kotak surat tetap aman di server. Kredensial di Keyring ikut dihapus.").
+				TextColor(t.TextMuted).FontSize(12)
+			ui.Row(c).Gap(10).Justify(ui.End).Children(func() {
+				if ui.Button(c, "Batal").Clicked() {
+					s.delAcc, s.delAccOpen = app.Account{}, false
+				}
+				if ui.Button(c, "Hapus").Label("Hapus akun " + acc.Email).Clicked() {
+					s.confirmDeleteAccount()
+				}
+			})
+		})
+	})
 }
 
 // accountForm menggambar form tambah akun: input manual + tombol simpan,
@@ -586,7 +617,7 @@ func (s *state) accountForm(c *ui.Context) {
 		if ui.Button(c, s.saveLabel()).Clicked() && !s.oauthBusy {
 			s.saveAccount()
 		}
-		if ui.Button(c, "Login via Google").Label("Login via Google (OAuth2)").Clicked() && !s.oauthBusy {
+		if ui.Button(c, "Login via Google").Label("Login via Google (OAuth2)").Clicked() {
 			s.loginGoogle()
 		}
 		if ui.Button(c, "Batal").Clicked() {
@@ -597,18 +628,33 @@ func (s *state) accountForm(c *ui.Context) {
 
 // loginGoogle memicu flow OAuth dari satu klik — tanpa input email:
 // email akun dibaca otomatis dari id_token Google, lalu akun Gmail dibuat.
+// Dipanggil ulang saat flow masih berjalan (mis. halaman authorize ditutup
+// tanpa selesai) = flow lama dibatalkan dan flow baru dimulai.
 // Catatan: StartOAuthLogin asinkron — cancel() tidak boleh defer, harus
 // dipanggil saat flow selesai (di callback), bukan saat goroutine kembali.
 func (s *state) loginGoogle() {
 	win := s.win
+	if s.oauthCancel != nil {
+		s.oauthCancel() // flow lama berhenti; callback usang diabaikan lewat oauthFlow
+		s.oauthCancel = nil
+	}
+	s.oauthFlow++
+	flow := s.oauthFlow
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	s.oauthCancel = cancel
 	s.oauthBusy, s.oauthMsg, s.oauthFail = true, "Menunggu authorize di browser…", false
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 		err := s.svc.StartOAuthLogin(ctx, func(email string, err error) {
 			cancel() // flow beres (sukses/gagal) — matikan server callback
 			win.Update(func() {
-				s.oauthBusy = false
+				if flow != s.oauthFlow {
+					return // callback flow lama yang sudah dibatalkan
+				}
+				s.oauthCancel, s.oauthBusy = nil, false
 				if err != nil {
+					if ctx.Err() != nil {
+						return // dibatalkan user (klik ulang)
+					}
 					s.oauthMsg, s.oauthFail = err.Error(), true
 					log.Printf("ui: oauth: %v", err)
 					return
@@ -709,7 +755,7 @@ func (s *state) readingPane(c *ui.Context) {
 			ui.Textf(c, "Gagal memuat isi pesan: %s", errMsg).TextColor(t.Danger)
 			ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
 				if s.reloginEmail != "" {
-					if ui.Button(c, "Login ulang Google").Clicked() && !s.oauthBusy {
+					if ui.Button(c, "Login ulang Google").Clicked() {
 						s.loginGoogle()
 					}
 				}
@@ -955,9 +1001,10 @@ func (s *state) saveLabel() string {
 }
 
 // shortDate memangkas timestamp ISO menjadi jam:menit singkat.
+// shortDate memformat timestamp ISO menjadi jam:menit lokal.
 func shortDate(iso string) string {
-	if len(iso) >= 16 {
-		return iso[11:16]
+	if t, err := time.Parse(time.RFC3339, iso); err == nil {
+		return t.Local().Format("15:04")
 	}
 	return iso
 }
