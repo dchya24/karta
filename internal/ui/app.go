@@ -593,9 +593,6 @@ func (s *state) accountForm(c *ui.Context) {
 			s.showAccount = false
 		}
 	})
-	ui.Text(c, "Login via Google: host Gmail diisi otomatis; klien ID dari"+
-		" env KARTA_OAUTH_CLIENT_ID atau ~/.config/karta/oauth.json").
-		TextColor(t.TextMuted).FontSize(12)
 }
 
 // loginGoogle memicu flow OAuth dari satu klik — tanpa input email:
