@@ -7,7 +7,7 @@ Dua fitur dikerjakan paralel di dua worktree (branch terpisah), lalu di-merge ke
 - Library: API native mygo (`NewNotification` + `ShowContext`) — nol dependensi baru, build `CGO_ENABLED=0` tetap lolos.
 - Desain: hook di `tryRefreshAccount` setelah header baru tersimpan; backfill awal sesi hening; dedupe per sesi (Message-ID / akun+folder+UID); hanya folder inbox; error hanya di-log.
 - Test: 8 test baru (fake Notifier): backfill suppression, dedupe, konkurensi, inbox-only, bentuk opsi. `go test -race` sync+app lulus, `go vet` bersih.
-- Catatan: macOS butuh app ter-package untuk notifikasi; pengiriman sinkron dengan timeout 10s.
+- Catatan (ditindaklanjuti): pengiriman notifikasi kini asinkron via satu goroutine antrean FIFO (siklus sync tidak menunggu); error notifikasi di macOS diberi hint "hanya tampil saat app ter-package sebagai .app". Limitasi macOS dev tetap ada (sifat sistem notifikasi macOS), tapi kini ter-log jelas.
 
 ## 2. Thread grouping message list (feat/thread-grouping)
 - Status: DONE

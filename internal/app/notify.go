@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"runtime"
 	"sync"
 	"time"
 
@@ -67,6 +68,15 @@ func notificationOptions(n NewMessage) mygo.NotificationOptions {
 	}
 }
 
+// logSendError mencatat kegagalan notifikasi. Di macOS ditambahi hint:
+// notifikasi OS hanya tampil saat app ter-package sebagai .app.
+func logSendError(err error) {
+	if runtime.GOOS == "darwin" {
+		err = fmt.Errorf("%w (macOS: notifikasi hanya tampil saat app ter-package sebagai .app)", err)
+	}
+	log.Printf("app: notifikasi pesan baru: %v", err)
+}
+
 // sessionNotifier memutuskan kapan notifikasi dikirim:
 //   - Sinkronisasi awal tiap folder dalam satu sesi (backfill) tidak
 //     dinotifikasikan: folder baru dianggap "terisi" saat sync pertamanya,
@@ -81,15 +91,43 @@ type sessionNotifier struct {
 	mu    sync.Mutex
 	seen  map[string]bool
 	armed map[int64]bool // folderID → sync awal sesi sudah lewat
+	queue chan notifyBatch
+	wg    sync.WaitGroup // batch yang masih di antrean/diproses
+}
+
+// notifyBatch adalah antrean pengiriman satu siklus observe. ctx disertakan
+// agar notifikasi mengikuti konteks pemanggil (inner sudah detach cancel).
+type notifyBatch struct {
+	ctx  context.Context
+	msgs []NewMessage
 }
 
 func newSessionNotifier(inner Notifier) *sessionNotifier {
-	return &sessionNotifier{
+	m := &sessionNotifier{
 		inner: inner,
 		seen:  map[string]bool{},
 		armed: map[int64]bool{},
+		queue: make(chan notifyBatch, 256),
 	}
+	// Satu goroutine konsumen seumur gate: pengiriman FIFO, sinkronisasi
+	// tidak pernah menunggu pengiriman notifikasi. Gate hidup selama sesi
+	// app, jadi goroutine ini sengaja tidak pernah dihentikan.
+	go func() {
+		for b := range m.queue {
+			for _, msg := range b.msgs {
+				if err := m.inner.NotifyNewMessage(b.ctx, msg); err != nil {
+					logSendError(err)
+				}
+			}
+			m.wg.Done()
+		}
+	}()
+	return m
 }
+
+// waitSends menunggu seluruh antrean pengiriman tuntas; dipakai unit test
+// agar asertif atas fake Notifier deterministik.
+func (m *sessionNotifier) waitSends() { m.wg.Wait() }
 
 // observe memproses header baru satu folder hasil sync. folderID mengenali
 // folder dalam sesi; pemanggilan pertama per folder dianggap backfill.
@@ -114,10 +152,12 @@ func (m *sessionNotifier) observe(ctx context.Context, folderID int64, folderNam
 	m.armed[folderID] = true
 	m.mu.Unlock()
 
-	for _, msg := range pending {
-		if err := m.inner.NotifyNewMessage(ctx, msg); err != nil {
-			log.Printf("app: notifikasi pesan baru: %v", err)
-		}
+	// Kirim asinkron: siklus sync tidak menunggu pengiriman notifikasi
+	// (puluhan pesan baru sekaligus tidak lagi menunda siklus sync).
+	// Dedupe sudah tuntas di atas, jadi antrean tidak bisa mengirim dobel.
+	if len(pending) > 0 {
+		m.wg.Add(1)
+		m.queue <- notifyBatch{ctx: ctx, msgs: pending}
 	}
 }
 
@@ -135,4 +175,12 @@ func (s *Service) notifyNewMessages(ctx context.Context, folderID int64, folderN
 		return
 	}
 	s.notify.observe(ctx, folderID, folderName, accountEmail, headers)
+}
+
+// waitNotifierSends menunggu antrean notifikasi tuntas (dipakai test yang
+// mengganti Notifier via SetNotifierForTesting).
+func (s *Service) waitNotifierSends() {
+	if s.notify != nil {
+		s.notify.waitSends()
+	}
 }

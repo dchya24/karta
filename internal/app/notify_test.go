@@ -60,13 +60,15 @@ func TestGateBackfillThenNotify(t *testing.T) {
 	}
 
 	// Sync awal folder: backfill, tidak ada notifikasi.
-	gate.observe(ctx, folder, "INBOX", "aku@contoh.id", headers1)
+	gate.observe(ctx, folder, "INBOX", "aku@contoh.id", headers1) // backfill
+	gate.waitSends()
 	if calls := fake.snapshot(); len(calls) != 0 {
 		t.Fatalf("backfill dinotifikasi: %+v", calls)
 	}
 
 	// Pesan lama dikirim ulang server (reconnect IDLE): tetap hening.
 	gate.observe(ctx, folder, "INBOX", "aku@contoh.id", headers1)
+	gate.waitSends()
 	if calls := fake.snapshot(); len(calls) != 0 {
 		t.Fatalf("pesan lama dinotifikasi ulang: %+v", calls)
 	}
@@ -75,6 +77,7 @@ func TestGateBackfillThenNotify(t *testing.T) {
 	headers2 := append(append([]mail.HeaderInfo(nil), headers1...),
 		mail.HeaderInfo{UID: 9, MessageID: "<baru@x>", Sender: "Cici <cici@x.id>", Subject: "undangan"})
 	gate.observe(ctx, folder, "INBOX", "aku@contoh.id", headers2)
+	gate.waitSends()
 	calls := fake.snapshot()
 	if len(calls) != 1 {
 		t.Fatalf("notifikasi %d kali, mau 1: %+v", len(calls), calls)
@@ -87,6 +90,7 @@ func TestGateBackfillThenNotify(t *testing.T) {
 
 	// Pesan yang sama di siklus berikutnya: tidak dinotifikasi dua kali.
 	gate.observe(ctx, folder, "INBOX", "aku@contoh.id", headers2)
+	gate.waitSends()
 	if calls := fake.snapshot(); len(calls) != 1 {
 		t.Fatalf("duplikat dinotifikasi: %+v", calls)
 	}
@@ -106,12 +110,14 @@ func TestGateFolderArmedIndependently(t *testing.T) {
 	gate.observe(ctx, 2, "Arsip", "baru@contoh.id",
 		[]mail.HeaderInfo{{UID: 1, MessageID: "<backfill@x>", Subject: "backfill"},
 			{UID: 2, MessageID: "<backfill2@x>", Subject: "backfill2"}})
+	gate.waitSends()
 	if calls := fake.snapshot(); len(calls) != 0 {
 		t.Fatalf("backfill folder baru dinotifikasi: %+v", calls)
 	}
 	// Pesan baru folder baru dinotifikasi.
 	gate.observe(ctx, 2, "Arsip", "baru@contoh.id",
 		[]mail.HeaderInfo{{UID: 3, MessageID: "<masuk@x>", Subject: "masuk"}})
+	gate.waitSends()
 	calls := fake.snapshot()
 	if len(calls) != 1 || calls[0].Subject != "masuk" {
 		t.Fatalf("notifikasi %+v, mau 1 subjek 'masuk'", calls)
@@ -127,6 +133,7 @@ func TestGateNotifyErrorLogged(t *testing.T) {
 	folder := int64(1)
 	gate.observe(ctx, folder, "INBOX", "aku@contoh.id",
 		[]mail.HeaderInfo{{UID: 1, MessageID: "<a@x>"}}) // backfill
+	gate.waitSends()
 
 	if err := ctx.Err(); err != nil {
 		t.Fatal(err)
@@ -136,6 +143,7 @@ func TestGateNotifyErrorLogged(t *testing.T) {
 		[]mail.HeaderInfo{{UID: 1, MessageID: "<a@x>"}, {UID: 2, MessageID: "<b@x>"}})
 	gate.observe(ctx, folder, "INBOX", "aku@contoh.id",
 		[]mail.HeaderInfo{{UID: 3, MessageID: "<c@x>"}})
+	gate.waitSends()
 	calls := fake.snapshot()
 	if len(calls) != 2 {
 		t.Fatalf("notifikasi %d kali, mau 2 (<b@x> gagal dicatat, <c@x> dicoba): %+v",
@@ -166,6 +174,7 @@ func TestGateConcurrentObserve(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+	gate.waitSends()
 	if calls := fake.snapshot(); len(calls) > 1 {
 		t.Fatalf("pesan sama dinotifikasi %d kali", len(calls))
 	}
@@ -238,6 +247,7 @@ func TestRefreshNotificationFlow(t *testing.T) {
 	if err := svc.Refresh(ctx); err != nil {
 		t.Fatal(err)
 	}
+	svc.waitNotifierSends()
 	if calls := fake.snapshot(); len(calls) != 0 {
 		t.Fatalf("backfill dinotifikasi: %+v", calls)
 	}
@@ -246,6 +256,7 @@ func TestRefreshNotificationFlow(t *testing.T) {
 	if err := svc.Refresh(ctx); err != nil {
 		t.Fatal(err)
 	}
+	svc.waitNotifierSends()
 	if calls := fake.snapshot(); len(calls) != 0 {
 		t.Fatalf("pesan lama dinotifikasi ulang: %+v", calls)
 	}
@@ -259,6 +270,7 @@ func TestRefreshNotificationFlow(t *testing.T) {
 	if err := svc.Refresh(ctx); err != nil {
 		t.Fatal(err)
 	}
+	svc.waitNotifierSends()
 	calls := fake.snapshot()
 	if len(calls) != 1 {
 		t.Fatalf("notifikasi %d kali, mau 1: %+v", len(calls), calls)
@@ -273,6 +285,7 @@ func TestRefreshNotificationFlow(t *testing.T) {
 	if err := svc.Refresh(ctx); err != nil {
 		t.Fatal(err)
 	}
+	svc.waitNotifierSends()
 	if calls := fake.snapshot(); len(calls) != 1 {
 		t.Fatalf("duplikat dinotifikasi: %+v", calls)
 	}
@@ -314,6 +327,7 @@ func TestRefreshNotificationInboxOnly(t *testing.T) {
 	if err := svc.Refresh(ctx); err != nil {
 		t.Fatal(err)
 	}
+	svc.waitNotifierSends()
 	if calls := fake.snapshot(); len(calls) != 0 {
 		t.Fatalf("folder sent dinotifikasi: %+v", calls)
 	}
