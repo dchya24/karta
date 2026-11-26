@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -22,14 +23,35 @@ func env(name, def string) string {
 	return def
 }
 
+// envFile membaca nilai dari file (satu baris pertama), untuk pola
+// *_FILE bila kredensial disediakan systemd sebagai kredensial terenkripsi.
+func envFile(name string) string {
+	path := os.Getenv(name)
+	if path == "" {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
 // loadConfig membaca konfigurasi dari environment dan gagal cepat bila
-// kredensial Google tidak tersedia.
+// kredensial Google tidak tersedia. Kredensial boleh lewat env langsung
+// atau env *_FILE yang menunjuk file berisi nilai (systemd credential).
 func loadConfig() (cfg config, err error) {
 	cfg = config{
 		Port:     env("PORT", "8080"),
 		ClientID: env("GOOGLE_OAUTH_CLIENT_ID", ""),
 		Secret:   env("GOOGLE_OAUTH_CLIENT_SECRET", ""),
 		TokenURL: defaultTokenURL,
+	}
+	if cfg.ClientID == "" {
+		cfg.ClientID = envFile("GOOGLE_OAUTH_CLIENT_ID_FILE")
+	}
+	if cfg.Secret == "" {
+		cfg.Secret = envFile("GOOGLE_OAUTH_CLIENT_SECRET_FILE")
 	}
 	if cfg.ClientID == "" || cfg.Secret == "" {
 		return cfg, errMissingCredentials
