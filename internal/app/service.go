@@ -634,6 +634,11 @@ func (s *Service) tryRefreshAccount(ctx context.Context, acc store.Account) erro
 				return err
 			}
 		}
+		// Header baru bisa menyatukan/memecah thread (reply datang sebelum
+		// root, dsb.): hitung ulang setelah tiap sync folder.
+		if err := s.db.RegroupThreads(folderID); err != nil {
+			return fmt.Errorf("regroup thread %s: %w", role, err)
+		}
 	}
 	return nil
 }

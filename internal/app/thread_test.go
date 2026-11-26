@@ -1,9 +1,12 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
+	"karta/internal/mail"
 	"karta/internal/store"
 )
 
@@ -70,5 +73,66 @@ func TestListThreadsDTO(t *testing.T) {
 	var raw []map[string]any
 	if err := json.Unmarshal(b, &raw); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestRefreshRegroupsThreads memastikan thread dihitung ulang setelah sync:
+// reply yang masuk duluan tetap bergabung dengan root yang menyusul.
+func TestRefreshRegroupsThreads(t *testing.T) {
+	svc := newTestService(t)
+	accID, err := svc.AddAccount(nil, AccountConfig{
+		Email: "regroup@contoh.id", IMAPHost: "imap", IMAPPort: 993, IMAPTLS: true,
+		SMTPHost: "smtp", SMTPPort: 465, SMTPTLS: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stub := &stubIMAP{
+		boxes: []mail.MailboxInfo{{Name: "INBOX", Role: "inbox"}},
+		// Sync 1: hanya reply (root belum ada di server maupun lokal).
+		inbox: []mail.HeaderInfo{
+			{UID: 3, MessageID: "<r1@x>", InReplyTo: "root@x",
+				Subject: "Re: Topik", Date: time.Date(2026, 11, 17, 2, 0, 0, 0, time.UTC), Unread: true},
+		},
+	}
+	old := imapDial
+	imapDial = func(cfg mail.IMAPConfig) (IMAPClient, error) { return stub, nil }
+	defer func() { imapDial = old }()
+
+	if err := svc.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var inboxID int
+	folders, _ := svc.ListFolders(accID)
+	for _, f := range folders {
+		if f.Role == "inbox" {
+			inboxID = f.ID
+		}
+	}
+	threads, err := svc.ListThreads(inboxID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(threads) != 1 {
+		t.Fatalf("setelah sync 1: %+v", threads)
+	}
+	// Sync 2: root datang (UID lebih besar tapi tanggal lebih lama).
+	stub.inbox = append(stub.inbox, mail.HeaderInfo{
+		UID: 5, MessageID: "<root@x>", Subject: "Topik",
+		Date: time.Date(2026, 11, 17, 1, 0, 0, 0, time.UTC), Unread: true,
+	})
+	if err := svc.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	threads, err = svc.ListThreads(inboxID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(threads) != 1 || threads[0].ThreadCount != 2 {
+		t.Fatalf("setelah sync 2: %+v, mau 1 thread 2 anggota", threads)
+	}
+	// Baris thread = pesan terbaru thread (reply UID 3).
+	if threads[0].UID != 3 {
+		t.Fatalf("pesan terbaru thread: %+v", threads[0])
 	}
 }
