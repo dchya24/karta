@@ -35,23 +35,23 @@ type Folder struct {
 // percakapan; ThreadCount/IsThreadLatest hanya terisi oleh
 // ListThreadSummaries (satu baris per thread).
 type MessageHeader struct {
-	ID            int
-	FolderID      int
-	UID           int
-	MessageID     string
-	InReplyTo     string
-	Refs          string // header References mentah, dipisah spasi
-	Subject       string
-	Sender        string
-	SenderAddr    string
-	Recipients    string
-	Cc            string
-	Date          string
-	Unread        bool
-	HasAttachment bool
-	Size          int
-	ThreadID      string
-	ThreadCount   int
+	ID             int
+	FolderID       int
+	UID            int
+	MessageID      string
+	InReplyTo      string
+	Refs           string // header References mentah, dipisah spasi
+	Subject        string
+	Sender         string
+	SenderAddr     string
+	Recipients     string
+	Cc             string
+	Date           string
+	Unread         bool
+	HasAttachment  bool
+	Size           int
+	ThreadID       string
+	ThreadCount    int
 	IsThreadLatest bool
 }
 
@@ -245,6 +245,11 @@ func (db *DB) UpsertMessage(m *MessageHeader, body *MessageBody) (int64, error) 
 	threadID := m.ThreadID
 	if threadID == "" {
 		threadID = ThreadSeedKey(int64(m.FolderID), m.MessageID, m.InReplyTo, m.Refs, m.Subject)
+	}
+	if threadID == "" {
+		// Tanpa identitas apa pun: singleton unik agar tidak ikut tergrup
+		// dengan pesan kosong lain (RegroupThreads membuat kunci serupa).
+		threadID = fmt.Sprintf("u%d:%d", m.FolderID, m.UID)
 	}
 	res, err := db.Exec(`INSERT INTO messages
 		(folder_id, uid, message_id, in_reply_to, refs, subject, sender, sender_addr,

@@ -437,3 +437,24 @@ func TestMigrationBackfillThreads(t *testing.T) {
 		t.Fatalf("thread backfill tidak menyatu: %q vs %q", tRoot, tReply)
 	}
 }
+
+// TestInsertSingletonNoIdentity: dua pesan tanpa identitas apa pun (tanpa
+// Message-ID/refs/subject) tidak boleh saling tergrup meski belum regroup.
+func TestInsertSingletonNoIdentity(t *testing.T) {
+	db := openTestDB(t)
+	folder := testFolder(t, db)
+	for uid := 1; uid <= 2; uid++ {
+		if _, err := db.UpsertMessage(&MessageHeader{
+			FolderID: int(folder), UID: uid, Date: fmt.Sprintf("2026-11-17T0%d:00:00Z", uid),
+		}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	threads, err := db.ListThreadSummaries(folder, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(threads) != 2 {
+		t.Fatalf("pesan tanpa identitas tergrup bersama: %+v", threads)
+	}
+}
