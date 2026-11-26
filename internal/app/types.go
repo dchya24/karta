@@ -27,6 +27,9 @@ type Folder struct {
 }
 
 // MessageHeader adalah metadata ringan satu pesan untuk daftar pesan.
+// Field thread (ThreadID/ThreadCount/IsThreadLatest) dipakai pengelompokan
+// percakapan: daftar thread menampilkan 1 baris per thread dengan jumlah
+// anggota; barisnya adalah pesan terbaru thread.
 type MessageHeader struct {
 	ID            int    `json:"id"`
 	FolderID      int    `json:"folderId"`
@@ -37,6 +40,9 @@ type MessageHeader struct {
 	Date          string `json:"date"`
 	Unread        bool   `json:"unread"`
 	HasAttachment bool   `json:"hasAttachment"`
+	ThreadID      string `json:"threadId,omitempty"`
+	ThreadCount   int    `json:"threadCount,omitempty"`
+	IsThreadLatest bool  `json:"isThreadLatest,omitempty"`
 }
 
 // Attachment adalah lampiran satu pesan.

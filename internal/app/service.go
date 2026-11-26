@@ -227,12 +227,33 @@ func (s *Service) ListMessages(folderID int, query string) ([]MessageHeader, err
 	}
 	out := make([]MessageHeader, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, MessageHeader{ID: r.ID, FolderID: r.FolderID,
-			UID: r.UID, Subject: r.Subject, Sender: r.Sender,
-			SenderAddr: r.SenderAddr, Date: r.Date, Unread: r.Unread,
-			HasAttachment: r.HasAttachment})
+		out = append(out, headerDTO(r))
 	}
 	return out, nil
+}
+
+// ListThreads mengembalikan daftar percakapan folder: satu baris per thread
+// (pesan terbarunya, IsThreadLatest=true) dengan jumlah anggota (ThreadCount).
+// Query pencarian tetap flat per pesan. Dipakai message list UI.
+func (s *Service) ListThreads(folderID int, query string) ([]MessageHeader, error) {
+	rows, err := s.db.ListThreadSummaries(int64(folderID), query)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]MessageHeader, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, headerDTO(r))
+	}
+	return out, nil
+}
+
+// headerDTO mengubah header store menjadi DTO JSON-friendly.
+func headerDTO(r store.MessageHeader) MessageHeader {
+	return MessageHeader{ID: r.ID, FolderID: r.FolderID,
+		UID: r.UID, Subject: r.Subject, Sender: r.Sender,
+		SenderAddr: r.SenderAddr, Date: r.Date, Unread: r.Unread,
+		HasAttachment: r.HasAttachment, ThreadID: r.ThreadID,
+		ThreadCount: r.ThreadCount, IsThreadLatest: r.IsThreadLatest}
 }
 
 // PeekMessage mengembalikan pesan dari cache lokal tanpa jaringan (aman
@@ -332,6 +353,12 @@ func (s *Service) fetchAndStoreBody(ctx context.Context, id, folderID int64, uid
 	body := &store.MessageBody{PlainText: parsed.PlainText, RawHTML: parsed.RawHTML}
 	if err := s.db.SetMessageBody(id, body); err != nil {
 		return err
+	}
+	// Header identitas thread dari raw pesan (References tidak selalu ada di
+	// sync header); SetMessageThreadHeaders mengisi kolom kosong lalu regroup.
+	if err := s.db.SetMessageThreadHeaders(id, parsed.MessageID,
+		parsed.InReplyTo, parsed.References); err != nil {
+		return fmt.Errorf("header thread pesan %d: %w", id, err)
 	}
 	if len(parsed.Attachments) > 0 {
 		// Gmail dkk. tidak menawarkan flag lampiran: deteksi dari hasil parse.
@@ -593,7 +620,8 @@ func (s *Service) tryRefreshAccount(ctx context.Context, acc store.Account) erro
 				recips = h.Recipients
 			}
 			sh := store.MessageHeader{FolderID: int(folderID), UID: int(h.UID),
-				MessageID: h.MessageID, Subject: h.Subject,
+				MessageID: h.MessageID, InReplyTo: h.InReplyTo, Refs: h.Refs,
+				Subject: h.Subject,
 				Sender: h.Sender, SenderAddr: h.SenderAddr, Recipients: recips, Cc: h.Cc,
 				Date: h.Date.UTC().Format(time.RFC3339), Unread: h.Unread,
 				HasAttachment: h.HasAttachment, Size: int(h.Size)}
