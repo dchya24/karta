@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -249,5 +250,30 @@ func TestGmailScopeValidation(t *testing.T) {
 	email, ok := IsOAuthRelogin(err)
 	if !ok || email != "devdinar05@gmail.com" {
 		t.Fatalf("oauthReloginScope harus OAuthReloginError: ok=%v email=%q", ok, email)
+	}
+}
+
+func TestParseGoogleToken(t *testing.T) {
+	body := []byte(`{"access_token":"ya29.x","token_type":"Bearer","expires_in":3599,
+		"refresh_token":"1//rt","scope":"https://mail.google.com/ openid email",
+		"id_token":"eyJhbGciOiJub25lIn0.eyJlbWFpbCI6ImRldmRpbmFyMDVAZ21haWwuY29tIn0."}`)
+	tok, err := parseGoogleToken(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tok.AccessToken != "ya29.x" || !tok.Valid() {
+		t.Fatalf("token salah: %+v", tok)
+	}
+	if scope, _ := tok.Extra("scope").(string); !hasGmailScope(scope) {
+		t.Fatalf("scope hilang: %v", tok.Extra("scope"))
+	}
+	raw := map[string]any{}
+	_ = json.Unmarshal(body, &raw)
+	if email, err := emailFromIDToken(tok); err != nil || email != "devdinar05@gmail.com" {
+		t.Fatalf("email dari id_token: %q %v", email, err)
+	}
+	// Respons tanpa access_token harus ditolak.
+	if _, err := parseGoogleToken([]byte(`{"error":"invalid_grant"}`)); err == nil {
+		t.Fatal("tanpa access_token harus error")
 	}
 }
