@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"testing"
 
+	"strings"
+
 	"github.com/egoist/mygo/ui"
 
 	"karta/internal/app"
