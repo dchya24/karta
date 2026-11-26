@@ -7,6 +7,10 @@
 
 Inti layanannya (IMAP/SMTP, parser MIME, SQLite FTS5) terpisah bersih dari lapisan UI, sehingga di masa depan bisa terhubung ke **Takka** (agent harness berbasis Rust) lewat IPC lokal.
 
+| Terang | Gelap |
+|---|---|
+| ![Karta terang](assets/screenshots/main-light.png) | ![Karta gelap](assets/screenshots/main-dark.png) |
+
 ## Fitur
 
 - **3-pane layout native** — sidebar folder multi-akun, daftar pesan (virtualisasi bawaan), reading pane `richtext` dengan tautan klikable (`https://` & `mailto:`).

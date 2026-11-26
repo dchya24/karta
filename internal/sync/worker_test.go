@@ -21,7 +21,7 @@ func (f *fakeRefresher) Refresh(ctx context.Context) error {
 func TestWorkerCycles(t *testing.T) {
 	f := &fakeRefresher{}
 	var updates atomic.Int64
-	w := NewWorker(f, 20*time.Millisecond, func() { updates.Add(1) })
+	w := NewWorker(f, 20*time.Millisecond, func(_ error) { updates.Add(1) })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -81,7 +81,7 @@ func (f *fakeWatcher) Watch(ctx context.Context, onEvent func()) {
 func TestWorkerIdleTrigger(t *testing.T) {
 	f := &fakeWatcher{push: make(chan struct{}, 1)}
 	var updates atomic.Int64
-	w := NewWorker(f, time.Hour, func() { updates.Add(1) })
+	w := NewWorker(f, time.Hour, func(_ error) { updates.Add(1) })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})

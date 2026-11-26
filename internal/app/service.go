@@ -2,8 +2,10 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/zalando/go-keyring"
@@ -344,7 +346,7 @@ func (s *Service) fetchAndStoreBody(ctx context.Context, id, folderID int64, uid
 }
 
 // MarkRead mengubah status baca pesan secara lokal lalu menyinkronkan flag
-// \Seen ke server IMAP (best-effort agar mode offline tetap berjalan).
+// \Seen ke server IMAP (best-effort: gagal sync menjadi SyncWarning).
 func (s *Service) MarkRead(ctx context.Context, id int, read bool) error {
 	if err := s.db.MarkRead(int64(id), read); err != nil {
 		return err
@@ -359,13 +361,12 @@ func (s *Service) MarkRead(ctx context.Context, id int, read bool) error {
 	}
 	cl, err := s.dialIMAP(ctx, acc)
 	if err != nil {
-		log.Printf("app: sync flag read pesan %d: %v", id, err)
-		return nil
+		return &SyncWarning{Msg: fmt.Sprintf("flag dibaca lokal, sync \\Seen gagal: %v", err)}
 	}
 	defer cl.Close()
 	if fs, ok := cl.(flagSetter); ok {
 		if err := fs.SetSeen(ctx, folder.Name, uint32(h.UID), read); err != nil {
-			log.Printf("app: set \\Seen pesan %d: %v", id, err)
+			return &SyncWarning{Msg: fmt.Sprintf("flag dibaca lokal, set \\Seen gagal: %v", err)}
 		}
 	}
 	return nil
@@ -398,19 +399,24 @@ func (s *Service) Delete(ctx context.Context, id int) error {
 	}
 	cl, err := s.dialIMAP(ctx, acc)
 	if err != nil {
-		log.Printf("app: hapus IMAP pesan %d: %v", id, err)
-		return nil
+		return &SyncWarning{Msg: fmt.Sprintf("dihapus lokal, hapus di server gagal: %v", err)}
 	}
 	defer cl.Close()
 	if mv, ok := cl.(messageMover); ok {
 		if err := mv.DeleteMessage(ctx, folder.Name, uint32(h.UID)); err != nil {
-			log.Printf("app: expunge IMAP pesan %d: %v", id, err)
+			return &SyncWarning{Msg: fmt.Sprintf("dihapus lokal, expunge server gagal: %v", err)}
 		}
 	}
 	return nil
 }
 
 func (s *Service) moveToRole(ctx context.Context, id int, role string) error {
+	verb := "Dipindah"
+	if role == "archive" {
+		verb = "Diarsipkan"
+	} else if role == "trash" {
+		verb = "Dipindah ke Trash"
+	}
 	h, _, err := s.db.GetMessage(int64(id))
 	if err != nil {
 		return err
@@ -434,15 +440,13 @@ func (s *Service) moveToRole(ctx context.Context, id int, role string) error {
 	}
 	cl, err := s.dialIMAP(ctx, acc)
 	if err != nil {
-		log.Printf("app: pindah IMAP pesan %d ke %s: %v", id, role, err)
-		return nil
+		return &SyncWarning{Msg: fmt.Sprintf("%s lokal, sync ke server gagal: %v", verb, err)}
 	}
 	defer cl.Close()
 	if mv, ok := cl.(messageMover); ok {
 		newUID, err := mv.MoveMessage(ctx, src.Name, uint32(h.UID), dst.Name)
 		if err != nil {
-			log.Printf("app: MOVE IMAP pesan %d ke %s: %v", id, dst.Name, err)
-			return nil
+			return &SyncWarning{Msg: fmt.Sprintf("%s lokal, MOVE server gagal: %v", verb, err)}
 		}
 		if newUID > 0 {
 			_ = s.db.SetMessageUID(int64(id), newUID)
@@ -463,26 +467,53 @@ func (s *Service) messageLocation(folderID int64) (*store.Folder, store.Account,
 	return folder, acc, nil
 }
 
+// MultiError menggabungkan kegagalan beberapa akun dalam satu Refresh;
+// errors.As tetap menemukan OAuthReloginError di dalamnya.
+type MultiError struct{ Errs []error }
+
+func (e *MultiError) Error() string {
+	msgs := make([]string, len(e.Errs))
+	for i, err := range e.Errs {
+		msgs[i] = err.Error()
+	}
+	return strings.Join(msgs, "; ")
+}
+
+func (e *MultiError) Unwrap() []error { return e.Errs }
+
+// SyncWarning melaporkan kegagalan langkah best-effort ke server IMAP
+// setelah aksi lokal berhasil — UI menampilkannya sebagai peringatan,
+// bukan kegagalan aksi.
+type SyncWarning struct{ Msg string }
+
+func (w *SyncWarning) Error() string { return w.Msg }
+
+// IsSyncWarning true bila err hanya peringatan sync best-effort.
+func IsSyncWarning(err error) bool {
+	var w *SyncWarning
+	return errors.As(err, &w)
+}
+
 // Refresh menyinkronkan semua akun: daftar folder, header baru folder inti.
-// Gagal satu akun tidak menghentikan akun lain; bila ada akun yang token
-// OAuth-nya kedaluwarsa (OAuthReloginError), error tersebut dikembalikan agar
-// UI dapat menawarkan login ulang.
+// Gagal satu akun tidak menghentikan akun lain; semua kegagalan dikembalikan
+// sebagai MultiError (termasuk OAuthReloginError yang dapat ditemukan
+// errors.As) agar UI dapat menampilkannya, bukan hanya mencatat log.
 func (s *Service) Refresh(ctx context.Context) error {
 	accs, err := s.db.ListAccounts()
 	if err != nil {
 		return err
 	}
-	var reloginErr error
+	var errs []error
 	for _, acc := range accs {
 		ac := acc
 		if err := s.refreshAccount(ctx, ac); err != nil {
-			log.Printf("app: sync %s: %v", ac.Email, err)
-			if _, ok := IsOAuthRelogin(err); ok && reloginErr == nil {
-				reloginErr = err
-			}
+			errs = append(errs, fmt.Errorf("sync %s: %w", ac.Email, err))
 		}
 	}
-	return reloginErr
+	if len(errs) == 0 {
+		return nil
+	}
+	return &MultiError{Errs: errs}
 }
 
 // coreRoles adalah folder yang disinkron otomatis (PRD §3.2).

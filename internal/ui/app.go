@@ -6,6 +6,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -99,6 +100,7 @@ type state struct {
 	fetching     map[int]bool
 	fetchErr     map[int]string
 	reloginEmail string
+	lastSyncErr  string // teks error sinkron latar terakhir, agar toast tidak dobel
 
 	// sinkronisasi manual
 	syncBusy bool
@@ -162,10 +164,23 @@ func Run(svc *app.Service) error {
 
 // startSync menjalankan worker polling di goroutine; setiap siklus memicu
 // repaint lewat Window.Update (main thread), tidak pernah sentuh widget langsung.
+// startSync menjalankan worker polling di goroutine; tiap siklus memicu
+// repaint lewat Window.Update (main thread). Error sinkronisasi tampil
+// sebagai toast — dedup sampai ada siklus yang sukses.
 func (s *state) startSync(ctx context.Context) {
 	win := s.win
-	go sync.NewWorker(s.svc, 5*time.Minute, func() {
-		win.Update(func() { s.reloadFolders() })
+	go sync.NewWorker(s.svc, 5*time.Minute, func(err error) {
+		win.Update(func() {
+			if err != nil {
+				if msg := err.Error(); msg != s.lastSyncErr {
+					s.lastSyncErr = msg
+					s.notify("Sinkronisasi gagal: "+msg, "error")
+				}
+			} else {
+				s.lastSyncErr = ""
+			}
+			s.reloadFolders()
+		})
 	}).Run(ctx)
 }
 
@@ -184,11 +199,11 @@ func (s *state) refreshNow() {
 			s.reloadFolders()
 			if err != nil {
 				s.syncMsg, s.syncFail = err.Error(), true
-				log.Printf("ui: refresh: %v", err)
 				s.handleErr("", err)
 				return
 			}
-			s.syncMsg, s.syncFail = "Sinkron " + time.Now().Format("15:04:05"), false
+			s.lastSyncErr = ""
+			s.syncMsg, s.syncFail = "Sinkron "+time.Now().Format("15:04:05"), false
 		})
 	}()
 }
@@ -314,7 +329,7 @@ func (s *state) deleteAccount(acc app.Account) {
 		Parent:  s.win,
 		Title:   "Hapus akun",
 		Message: "Hapus akun " + acc.Email + "?",
-		Detail:  "Folder dan pesan yang tersinkron dihapus dari perangkat ini; " +
+		Detail: "Folder dan pesan yang tersinkron dihapus dari perangkat ini; " +
 			"isi kotak surat tetap aman di server. Kredensial di Keyring ikut dihapus.",
 		Buttons:            []string{"Hapus", "Batal"},
 		CancelButton:       1,
@@ -384,11 +399,12 @@ func (s *state) notify(title, kind string) {
 // handleErr mendeteksi OAuthReloginError untuk menampilkan toast aksi
 // "Login ulang" + banner re-auth; error lain ditampilkan sebagai toast biasa.
 func (s *state) handleErr(prefix string, err error) {
-	if email, ok := app.IsOAuthRelogin(err); ok {
-		s.reloginEmail = email
+	var re *app.OAuthReloginError
+	if errors.As(err, &re) {
+		s.reloginEmail = re.Email
 		s.pendingToasts = append(s.pendingToasts, ui.Toast{
-			ID:       "relogin-" + email,
-			Title:    err.Error(),
+			ID:       "relogin-" + re.Email,
+			Title:    re.Error(),
 			Type:     "error",
 			Action:   "Login ulang",
 			OnAction: func() { s.loginGoogle() },
@@ -484,7 +500,7 @@ func (s *state) view(c *ui.Context) {
 			}
 			if s.reloginEmail != "" {
 				ui.Textf(c, "Sesi %s habis", s.reloginEmail).FontSize(11).PaddingX(10).TextColor(t.Danger)
-				if ui.Button(c, "Login ulang Google").Label("Login ulang " + s.reloginEmail).MarginX(10).Clicked() && !s.oauthBusy {
+				if ui.Button(c, "Login ulang Google").Label("Login ulang "+s.reloginEmail).MarginX(10).Clicked() && !s.oauthBusy {
 					s.loginGoogle()
 				}
 			}
@@ -810,34 +826,32 @@ func (s *state) openLink(raw string) {
 
 // runAction menjalankan operasi pesan di goroutine lalu memperbarui UI di main
 // thread via Window.Update; pada mode uji headless (win == nil) berjalan langsung.
+// Kegagalan sync best-effort (SyncWarning) tampil sebagai toast peringatan:
+// aksi lokal berhasil, hanya server yang tertinggal.
 func (s *state) runAction(okToast string, op func(context.Context) error) {
-	win := s.win
-	if win == nil {
-		if err := op(context.Background()); err != nil {
+	done := func(err error) {
+		switch {
+		case err == nil:
+			if okToast != "" {
+				s.notify(okToast, "success")
+			}
+		case app.IsSyncWarning(err):
+			s.notify(err.Error(), "warning")
+		default:
 			s.handleErr("", err)
-			return
-		}
-		if okToast != "" {
-			s.notify(okToast, "success")
 		}
 		s.reloadFolders()
+	}
+	win := s.win
+	if win == nil {
+		done(op(context.Background()))
 		return
 	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		err := op(ctx)
-		win.Update(func() {
-			if err != nil {
-				s.handleErr("", err)
-				log.Printf("ui: aksi pesan: %v", err)
-				return
-			}
-			if okToast != "" {
-				s.notify(okToast, "success")
-			}
-			s.reloadFolders()
-		})
+		win.Update(func() { done(err) })
 	}()
 }
 

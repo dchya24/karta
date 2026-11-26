@@ -3,15 +3,16 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
-
 
 	"karta/internal/mail"
 	"karta/internal/store"
 )
-
 
 func newTestService(t *testing.T) *Service {
 	t.Helper()
@@ -91,6 +92,10 @@ func TestMessageFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Koneksi IMAP di-stub agar Refresh/flag sync tidak butuh jaringan.
+	old := imapDial
+	imapDial = func(cfg mail.IMAPConfig) (IMAPClient, error) { return &stubIMAP{}, nil }
+	defer func() { imapDial = old }()
 	if _, err := svc.db.EnsureFolder(int64(accID), "INBOX", "inbox"); err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +130,7 @@ func TestMessageFlow(t *testing.T) {
 	if m.Unread {
 		t.Fatal("PeekMessage harus menandai terbaca")
 	}
-	if err := svc.MarkRead(context.Background(), m.ID, false); err != nil {
+	if err := svc.MarkRead(context.Background(), m.ID, false); err != nil && !IsSyncWarning(err) {
 		t.Fatal(err)
 	}
 	if err := svc.Refresh(context.Background()); err != nil {
@@ -268,24 +273,44 @@ func TestAddAccountUpsert(t *testing.T) {
 
 type actionStubIMAP struct {
 	stubIMAP
-	seenCalls   []struct{ box string; uid uint32; seen bool }
-	moveCalls   []struct{ src, dst string; uid uint32 }
-	deleteCalls []struct{ box string; uid uint32 }
+	seenCalls []struct {
+		box  string
+		uid  uint32
+		seen bool
+	}
+	moveCalls []struct {
+		src, dst string
+		uid      uint32
+	}
+	deleteCalls []struct {
+		box string
+		uid uint32
+	}
 	nextDestUID uint32
 }
 
 func (s *actionStubIMAP) SetSeen(_ context.Context, mailbox string, uid uint32, seen bool) error {
-	s.seenCalls = append(s.seenCalls, struct{ box string; uid uint32; seen bool }{mailbox, uid, seen})
+	s.seenCalls = append(s.seenCalls, struct {
+		box  string
+		uid  uint32
+		seen bool
+	}{mailbox, uid, seen})
 	return nil
 }
 
 func (s *actionStubIMAP) MoveMessage(_ context.Context, src string, uid uint32, dst string) (uint32, error) {
-	s.moveCalls = append(s.moveCalls, struct{ src, dst string; uid uint32 }{src, dst, uid})
+	s.moveCalls = append(s.moveCalls, struct {
+		src, dst string
+		uid      uint32
+	}{src, dst, uid})
 	return s.nextDestUID, nil
 }
 
 func (s *actionStubIMAP) DeleteMessage(_ context.Context, mailbox string, uid uint32) error {
-	s.deleteCalls = append(s.deleteCalls, struct{ box string; uid uint32 }{mailbox, uid})
+	s.deleteCalls = append(s.deleteCalls, struct {
+		box string
+		uid uint32
+	}{mailbox, uid})
 	return nil
 }
 
@@ -364,34 +389,111 @@ func TestMessageActionsAndCc(t *testing.T) {
 	}
 }
 
-func TestWatchIdleAndReconnect(t *testing.T) {
+func TestWatchIdleFoldersReconnectAndRelogin(t *testing.T) {
 	svc := newTestService(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if _, err := svc.AddAccount(ctx, AccountConfig{
+	accID, err := svc.AddAccount(ctx, AccountConfig{
 		Email: "aku@contoh.id", Password: "pw",
 		IMAPHost: "imap.contoh.id", IMAPPort: 993, IMAPTLS: true,
 		SMTPHost: "smtp.contoh.id", SMTPPort: 465, SMTPTLS: true,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	oldIdle, oldDelay := imapIdle, idleBaseDelay
+	// Folder inti yang di-IDLE: INBOX + Trash ("other" tidak).
+	for _, f := range []struct{ name, role string }{
+		{"INBOX", "inbox"}, {"Trash", "trash"}, {"Custom", "other"},
+	} {
+		if _, err := svc.db.EnsureFolder(int64(accID), f.name, f.role); err != nil {
+			t.Fatal(err)
+		}
+	}
+	oldIdle, oldDelay, oldRescan := imapIdle, idleBaseDelay, idleRescanDelay
 	idleBaseDelay = 5 * time.Millisecond
-	defer func() { imapIdle, idleBaseDelay = oldIdle, oldDelay }()
+	defer func() {
+		imapIdle, idleBaseDelay, idleRescanDelay = oldIdle, oldDelay, oldRescan
+	}()
 
-	attempts := 0
-	events := 0
+	var mu sync.Mutex
+	attempts := map[string]int{}
 	imapIdle = func(c context.Context, cfg mail.IMAPConfig, box string, onEvent func()) error {
-		attempts++
-		if attempts == 1 {
+		mu.Lock()
+		attempts[box]++
+		retryFirst := box == "INBOX" && attempts[box] == 1
+		mu.Unlock()
+		if retryFirst {
+			// Percobaan pertama INBOX gagal transient → reconnect.
 			return &mail.TransientError{Op: "idle", Err: context.DeadlineExceeded}
 		}
 		onEvent()
-		cancel()
-		return c.Err()
+		return nil
 	}
-	svc.Watch(ctx, func() { events++ })
-	if attempts != 2 || events != 1 {
-		t.Fatalf("attempts=%d events=%d, mau 2 dan 1", attempts, events)
+	var events atomic.Int64
+	done := make(chan struct{})
+	go func() { svc.Watch(ctx, func() { events.Add(1) }); close(done) }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		mu.Lock()
+		ok := attempts["INBOX"] >= 2 && attempts["Trash"] >= 1
+		mu.Unlock()
+		if ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("reconnect IDLE tidak terjadi")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Watch tidak berhenti setelah cancel")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(attempts) != 2 {
+		t.Fatalf("folder di-IDLE %v, mau 2 (tanpa Custom)", attempts)
+	}
+	if attempts["INBOX"] != 2 {
+		t.Fatalf("attempts[INBOX]=%d, mau 2 (1 gagal + 1 sukses)", attempts["INBOX"])
+	}
+	if attempts["Trash"] != 1 {
+		t.Fatalf("attempts[Trash]=%d, mau 1", attempts["Trash"])
+	}
+	if e := events.Load(); e != 2 {
+		t.Fatalf("events=%d, mau 2", e)
+	}
+}
+
+// TestWatchIdleReloginStops memastikan kegagalan kredensial OAuth menghentikan
+// Watch (tidak rescan berulang); polling tetap jalan sebagai jaring pengaman.
+func TestWatchIdleReloginStops(t *testing.T) {
+	svc := newTestService(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	accID, err := svc.AddAccount(ctx, AccountConfig{
+		Email: "aku@contoh.id", Password: "pw",
+		IMAPHost: "imap.contoh.id", IMAPPort: 993, IMAPTLS: true,
+		SMTPHost: "smtp.contoh.id", SMTPPort: 465, SMTPTLS: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.EnsureFolder(int64(accID), "INBOX", "inbox"); err != nil {
+		t.Fatal(err)
+	}
+	oldIdle := imapIdle
+	defer func() { imapIdle = oldIdle }()
+	n := 0
+	imapIdle = func(context.Context, mail.IMAPConfig, string, func()) error {
+		n++
+		return &OAuthReloginError{Email: "aku@contoh.id", Err: errors.New("invalid_grant")}
+	}
+	svc.Watch(ctx, func() {})
+	if n != 1 {
+		t.Fatalf("imapIdle dipanggil %d kali, mau 1 (Watch berhenti saat relogin)", n)
 	}
 }

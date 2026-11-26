@@ -113,21 +113,20 @@ func (db *DB) ListAccounts() ([]Account, error) {
 
 // EnsureFolder memastikan folder terdaftar dan mengembalikan ID-nya.
 func (db *DB) EnsureFolder(accountID int64, name, role string) (int64, error) {
-	res, err := db.Exec(`INSERT INTO folders (account_id, name, role)
+	_, err := db.Exec(`INSERT INTO folders (account_id, name, role)
 		VALUES (?,?,?)
 		ON CONFLICT(account_id, name) DO UPDATE SET role=excluded.role`,
 		accountID, name, role)
 	if err != nil {
 		return 0, fmt.Errorf("daftarkan folder %s: %w", name, err)
 	}
-	id, err := res.LastInsertId()
+	// Jangan percaya LastInsertId modernc/sqlite setelah ON CONFLICT DO
+	// UPDATE (rowid fiktif); ambil ulang id lewat unique key.
+	var id int64
+	err = db.QueryRow(`SELECT id FROM folders WHERE account_id=? AND name=?`,
+		accountID, name).Scan(&id)
 	if err != nil {
-		// Konflik: ambil ID yang sudah ada.
-		err = db.QueryRow(`SELECT id FROM folders WHERE account_id=? AND name=?`,
-			accountID, name).Scan(&id)
-		if err != nil {
-			return 0, fmt.Errorf("cari folder %s: %w", name, err)
-		}
+		return 0, fmt.Errorf("cari folder %s: %w", name, err)
 	}
 	return id, nil
 }

@@ -67,22 +67,25 @@ func (s *Service) SendDraft(ctx context.Context, accountID int, d Draft) error {
 		return err
 	}
 
-	// Salinan ke Sent, best-effort.
+	// Salinan ke Sent, best-effort: kegagalan dilaporkan sebagai SyncWarning
+	// agar UI menampilkannya (pesan tetap terkirim).
+	warn := func(format string, args ...any) error {
+		log.Printf("app: salinan Sent: "+format, args...)
+		return &SyncWarning{Msg: "email terkirim, salinan Sent gagal: " +
+			fmt.Sprintf(format, args...)}
+	}
 	cl, err := s.dialIMAP(ctx, acc)
 	if err != nil {
-		log.Printf("app: salinan Sent tidak dikirim: %v", err)
-		return nil
+		return warn("dial IMAP: %v", err)
 	}
 	defer cl.Close()
 	box, err := mailboxByRole(ctx, cl, "sent")
 	if err != nil {
-		log.Printf("app: folder Sent tidak ditemukan: %v", err)
-		return nil
+		return warn("folder Sent tidak ditemukan: %v", err)
 	}
 	ap, ok := cl.(appender)
 	if !ok {
-		log.Printf("app: klien IMAP tidak mendukung APPEND")
-		return nil
+		return warn("klien IMAP tidak mendukung APPEND")
 	}
 	copyBytes, err := mail.ComposeMessage(out)
 	if err != nil {
@@ -95,7 +98,7 @@ func (s *Service) SendDraft(ctx context.Context, accountID int, d Draft) error {
 		return nil
 	}
 	if err := ap.Append(ctx, box, copyBytes); err != nil {
-		log.Printf("app: append salinan Sent: %v", err)
+		return warn("append: %v", err)
 	}
 	return nil
 }

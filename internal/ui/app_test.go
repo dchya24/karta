@@ -170,7 +170,7 @@ func TestReadingPaneHeadersReplyAllAndShortcuts(t *testing.T) {
 	if len(st.msgs) != 1 || st.msgs[0].Subject != "Salam pembuka" {
 		t.Fatalf("shortcut E gagal arsip: %+v", st.msgs)
 	}
-	if !tt.HasText("Pesan diarsipkan") {
+	if !tt.HasText("Pesan diarsipkan") && !tt.HasText("Diarsipkan lokal") {
 		t.Fatal("toast arsip tidak tampil")
 	}
 

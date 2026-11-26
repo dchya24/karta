@@ -1,12 +1,14 @@
 package ui
 
-// Harness evaluasi visual headless: render view Karta ke PNG di /tmp.
+// Harness evaluasi visual headless: render view Karta ke PNG di
+// assets/screenshots/ (dipakai README/halaman GitHub).
 // Jalan manual: KARTA_UI_EVAL=1 go test ./internal/ui -run TestEvalRender -v
 // Tidak berjalan di CI biasa.
 
 import (
 	"image/png"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -18,7 +20,12 @@ func savePNG(t *testing.T, tt *ui.Tester, name string) {
 	if img == nil {
 		t.Fatalf("%s: Image() nil", name)
 	}
-	f, err := os.Create("/tmp/karta-ui-" + name + ".png")
+	// Paket test selalu di internal/ui — root repo dua tingkat di atas.
+	dir := filepath.Join("..", "..", "assets", "screenshots")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Create(filepath.Join(dir, name+".png"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +33,7 @@ func savePNG(t *testing.T, tt *ui.Tester, name string) {
 	if err := png.Encode(f, img); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("simpan /tmp/karta-ui-%s.png", name)
+	t.Logf("simpan %s/%s.png", dir, name)
 }
 
 func TestEvalRender(t *testing.T) {
@@ -35,6 +42,9 @@ func TestEvalRender(t *testing.T) {
 	}
 	st := &state{svc: testService(t), fetching: map[int]bool{}}
 	st.reloadFolders()
+	if len(st.msgs) > 0 {
+		st.selected = 0 // pesan pertama terbuka di reading pane
+	}
 
 	// 1. View utama 3-pane, light.
 	tt := ui.NewTester(st.view, 1100, 720)

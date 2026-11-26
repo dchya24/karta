@@ -23,19 +23,19 @@ type Watcher interface {
 }
 
 // Worker melakukan polling berkala (plus IMAP IDLE bila didukung) dan
-// memanggil onUpdate setelah tiap siklus.
+// memanggil onCycle setelah tiap siklus dengan error sinkronisasi (nil = sukses).
 type Worker struct {
 	refresher Refresher
 	interval  time.Duration
-	onUpdate  func()
+	onCycle   func(error)
 }
 
 // NewWorker membuat worker; interval <= 0 diganti default 5 menit.
-func NewWorker(r Refresher, interval time.Duration, onUpdate func()) *Worker {
+func NewWorker(r Refresher, interval time.Duration, onCycle func(err error)) *Worker {
 	if interval <= 0 {
 		interval = 5 * time.Minute
 	}
-	return &Worker{refresher: r, interval: interval, onUpdate: onUpdate}
+	return &Worker{refresher: r, interval: interval, onCycle: onCycle}
 }
 
 // Run menjalankan polling (+ IDLE push bila tersedia) sampai ctx dibatalkan.
@@ -74,11 +74,11 @@ func (w *Worker) Run(ctx context.Context) {
 }
 
 func (w *Worker) cycle(ctx context.Context) {
-	if err := w.refresher.Refresh(ctx); err != nil {
-		// Sinkronisasi gagal bukan alasan mati: catat, coba lagi nanti.
+	err := w.refresher.Refresh(ctx)
+	// Sinkronisasi gagal bukan alasan mati: laporkan, coba lagi nanti.
+	if w.onCycle != nil {
+		w.onCycle(err)
+	} else if err != nil {
 		log.Printf("sync: %v", err)
-	}
-	if w.onUpdate != nil {
-		w.onUpdate()
 	}
 }
