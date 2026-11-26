@@ -71,11 +71,12 @@ const perAccountTimeout = 2 * time.Minute
 type Service struct {
 	db      *store.DB
 	keyring credentialStore
+	notify  *sessionNotifier
 }
 
 // New membuat Service di atas store yang sudah terbuka.
 func New(db *store.DB) *Service {
-	return &Service{db: db, keyring: osKeyring{}}
+	return &Service{db: db, keyring: osKeyring{}, notify: newSessionNotifier(mygoNotifier{})}
 }
 
 // SetKeyringForTesting mengganti penyimpanan kredensial (khusus test
@@ -605,6 +606,9 @@ func (s *Service) tryRefreshAccount(ctx context.Context, acc store.Account) erro
 			if err := s.db.UpdateFolderSync(folderID, maxUID); err != nil {
 				return err
 			}
+		}
+		if role == "inbox" {
+			s.notifyNewMessages(ctx, folderID, folder.Name, acc.Email, headers)
 		}
 	}
 	return nil
