@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -205,7 +206,9 @@ func (s *Service) ListAccounts() ([]Account, error) {
 	return out, nil
 }
 
-// ListFolders mengembalikan folder satu akun.
+// ListFolders mengembalikan folder satu akun terurut sesuai urutan sidebar:
+// folder inti dulu (inbox→drafts→sent→archive→trash→junk), lalu folder
+// non-core alfabetis — konsisten dengan urutan sinkronisasi refreshAccount.
 func (s *Service) ListFolders(accountID int) ([]Folder, error) {
 	rows, err := s.db.ListFolders(int64(accountID))
 	if err != nil {
@@ -216,6 +219,14 @@ func (s *Service) ListFolders(accountID int) ([]Folder, error) {
 		out = append(out, Folder{ID: r.ID, AccountID: r.AccountID,
 			Name: r.Name, Role: r.Role, Unread: r.Unread})
 	}
+	sort.Slice(out, func(i, j int) bool {
+		ri, ni := syncOrder(out[i].Role, out[i].Name)
+		rj, nj := syncOrder(out[j].Role, out[j].Name)
+		if ri != rj {
+			return ri < rj
+		}
+		return ni < nj
+	})
 	return out, nil
 }
 
@@ -544,9 +555,28 @@ func (s *Service) Refresh(ctx context.Context) error {
 	return &MultiError{Errs: errs}
 }
 
-// coreRoles adalah folder yang disinkron otomatis (PRD §3.2).
+// coreRoles adalah folder inti yang di-watch IDLE (push realtime); PRD §3.2.
+// Sinkronisasi header sendiri mencakup SEMUA folder (lihat roleRank).
 var coreRoles = map[string]bool{
 	"inbox": true, "sent": true, "drafts": true, "trash": true, "archive": true,
+}
+
+// roleRank adalah urutan prioritas folder inti dalam satu siklus sinkronisasi
+// penuh dan sidebar: folder inti dulu agar Inbox cepat tampil, folder non-core
+// (role "other") menyusul alfabetis. Junk ikut disinkron tiap siklus.
+var roleRank = map[string]int{
+	"inbox": 0, "drafts": 1, "sent": 2, "archive": 3, "trash": 4, "junk": 5,
+}
+
+// syncOrder mengembalikan kunci urutan sinkronisasi/sidebar satu folder:
+// rank peran dulu, lalu nama alfabetis (untuk peran yang sama). Folder
+// non-core (peran tidak dikenal, mis. "other") berada di belakang folder inti.
+func syncOrder(role, name string) (int, string) {
+	rank, ok := roleRank[role]
+	if !ok {
+		rank = len(roleRank) // "other" di belakang semua folder inti
+	}
+	return rank, name
 }
 
 // Retry: percobaan ulang per akun untuk error transient (dial/TLS/putus
@@ -593,20 +623,34 @@ func (s *Service) tryRefreshAccount(ctx context.Context, acc store.Account) erro
 	if err != nil {
 		return err
 	}
-	folderIDs := map[string]int64{} // role → folder ID
+	// Semua folder yang dikembalikan server didaftarkan dan disinkron —
+	// bukan hanya folder inti (PRD §3.2 diperluas ke folder dinamis).
+	type syncFolder struct {
+		name, role string
+		id         int64
+	}
+	folders := make([]syncFolder, 0, len(boxes))
 	for _, b := range boxes {
 		id, err := s.db.EnsureFolder(int64(acc.ID), b.Name, b.Role)
 		if err != nil {
 			return err
 		}
-		if coreRoles[b.Role] {
-			folderIDs[b.Role] = id
-		}
+		folders = append(folders, syncFolder{name: b.Name, role: b.Role, id: id})
 	}
-	for role, folderID := range folderIDs {
+	// Folder inti dulu (urut roleRank), lalu folder non-core alfabetis.
+	sort.Slice(folders, func(i, j int) bool {
+		ri, ni := syncOrder(folders[i].role, folders[i].name)
+		rj, nj := syncOrder(folders[j].role, folders[j].name)
+		if ri != rj {
+			return ri < rj
+		}
+		return ni < nj
+	})
+	for _, sf := range folders {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		role, folderID := sf.role, sf.id
 		folder, err := s.db.FolderByID(folderID)
 		if err != nil {
 			return err
@@ -623,7 +667,7 @@ func (s *Service) tryRefreshAccount(ctx context.Context, acc store.Account) erro
 			sh := store.MessageHeader{FolderID: int(folderID), UID: int(h.UID),
 				MessageID: h.MessageID, InReplyTo: h.InReplyTo, Refs: h.Refs,
 				Subject: h.Subject,
-				Sender: h.Sender, SenderAddr: h.SenderAddr, Recipients: recips, Cc: h.Cc,
+				Sender:  h.Sender, SenderAddr: h.SenderAddr, Recipients: recips, Cc: h.Cc,
 				Date: h.Date.UTC().Format(time.RFC3339), Unread: h.Unread,
 				HasAttachment: h.HasAttachment, Size: int(h.Size)}
 			if _, err := s.db.UpsertMessage(&sh, nil); err != nil {
