@@ -61,7 +61,20 @@ var migrations = []string{
 	`ALTER TABLE accounts ADD COLUMN auth TEXT NOT NULL DEFAULT 'password'`,
 	// v3: kolom Cc terpisah agar reading pane dan Reply All menampilkan Cc akurat.
 	`ALTER TABLE messages ADD COLUMN cc TEXT`,
+	// v4: identitas thread percakapan. thread_id = kunci grup per-folder
+	// (hasil ThreadSeedKey/RegroupThreads); refs menyimpan header References
+	// mentah (in_reply_to sudah ada sejak v1, kini ikut terisi). Index
+	// (folder, thread, date, uid) mendukung query pesan-terbaru-per-thread
+	// tanpa full scan tabel.
+	`ALTER TABLE messages ADD COLUMN thread_id TEXT NOT NULL DEFAULT '';
+	ALTER TABLE messages ADD COLUMN refs TEXT NOT NULL DEFAULT '';
+	CREATE INDEX idx_messages_thread ON messages(folder_id, thread_id, date DESC, uid DESC)`,
 }
+
+// threadSchemaVersion adalah versi migrasi yang menambah kolom thread.
+// Setelah migrasi ini diterapkan, backfillThreadIDs dijalankan sekali untuk
+// mengisi thread_id pesan lama.
+const threadSchemaVersion = 4
 
 // migrate menjalankan migrasi yang belum diterapkan, sekaligus memverifikasi
 // dukungan FTS5 sejak awal.
@@ -80,6 +93,7 @@ func (db *DB) migrate() error {
 	if err := db.QueryRow(`SELECT COALESCE(MAX(version),0) FROM schema_migrations`).Scan(&current); err != nil {
 		return fmt.Errorf("baca versi skema: %w", err)
 	}
+	threadJustApplied := false
 	for i, stmt := range migrations {
 		v := i + 1
 		if v <= current {
@@ -100,6 +114,53 @@ func (db *DB) migrate() error {
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("commit migrasi v%d: %w", v, err)
 		}
+		if v == threadSchemaVersion {
+			threadJustApplied = true
+		}
+	}
+	if threadJustApplied {
+		// Backfill thread_id pesan lama sekali saja, di satu transaksi:
+		// gagal di tengah = rollback penuh, thread_id tetap kosong.
+		if err := db.backfillThreadIDs(); err != nil {
+			return fmt.Errorf("backfill thread_id: %w", err)
+		}
+	}
+	return nil
+}
+
+// backfillThreadIDs menghitung ulang thread_id semua folder (pesanan lama
+// dari sebelum kolom thread_id ada).
+func (db *DB) backfillThreadIDs() error {
+	rows, err := db.Query(`SELECT id FROM folders`)
+	if err != nil {
+		return fmt.Errorf("daftar folder backfill: %w", err)
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return fmt.Errorf("baca folder backfill: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("iterasi folder backfill: %w", err)
+	}
+	rows.Close()
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("mulai tx backfill: %w", err)
+	}
+	defer tx.Rollback()
+	for _, id := range ids {
+		if err := regroupThreadsTx(tx, id); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit backfill: %w", err)
 	}
 	return nil
 }

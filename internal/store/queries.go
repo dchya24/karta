@@ -31,11 +31,16 @@ type Folder struct {
 }
 
 // MessageHeader adalah metadata ringan satu pesan untuk daftar pesan.
+// Header reply (InReplyTo/Refs) dan ThreadID dipakai pengelompokan
+// percakapan; ThreadCount/IsThreadLatest hanya terisi oleh
+// ListThreadSummaries (satu baris per thread).
 type MessageHeader struct {
 	ID            int
 	FolderID      int
 	UID           int
 	MessageID     string
+	InReplyTo     string
+	Refs          string // header References mentah, dipisah spasi
 	Subject       string
 	Sender        string
 	SenderAddr    string
@@ -45,7 +50,19 @@ type MessageHeader struct {
 	Unread        bool
 	HasAttachment bool
 	Size          int
+	ThreadID      string
+	ThreadCount   int
+	IsThreadLatest bool
 }
+
+// headerCols adalah daftar kolom header pesan untuk SELECT, dengan alias
+// agregasi thread (thread_count/is_thread_latest) bernilai 0 pada query
+// per-pesan biasa. Urutannya mengikuti scanHeaders.
+const headerCols = `id, folder_id, uid, COALESCE(message_id,''),
+		COALESCE(in_reply_to,''), COALESCE(refs,''), COALESCE(subject,''),
+		COALESCE(sender,''), COALESCE(sender_addr,''), COALESCE(recipients,''),
+		COALESCE(cc,''), COALESCE(date,''), unread, has_attachment, size,
+		COALESCE(thread_id,''), 0 AS thread_count, 0 AS is_thread_latest`
 
 // MessageBody melengkapi header dengan isi pesan.
 type MessageBody struct {
@@ -214,7 +231,9 @@ func (db *DB) InsertAttachment(messageID int64, filename, contentType string, da
 }
 
 // UpsertMessage menyimpan header pesan (dan isi bila sudah di-fetch),
-// mengindeks teksnya ke FTS5, dan mengembalikan ID barisnya.
+// mengindeks teksnya ke FTS5, dan mengembalikan ID barisnya. thread_id
+// dihitung saat insert (ThreadSeedKey); RegroupThreads yang menyatukan
+// rantai lintas pesan.
 func (db *DB) UpsertMessage(m *MessageHeader, body *MessageBody) (int64, error) {
 	var fetched int
 	var plain, raw sql.NullString
@@ -223,18 +242,26 @@ func (db *DB) UpsertMessage(m *MessageHeader, body *MessageBody) (int64, error) 
 		plain, raw = sql.NullString{String: body.PlainText, Valid: true},
 			sql.NullString{String: body.RawHTML, Valid: true}
 	}
+	threadID := m.ThreadID
+	if threadID == "" {
+		threadID = ThreadSeedKey(int64(m.FolderID), m.MessageID, m.InReplyTo, m.Refs, m.Subject)
+	}
 	res, err := db.Exec(`INSERT INTO messages
-		(folder_id, uid, message_id, subject, sender, sender_addr, recipients, cc,
-		 date, unread, has_attachment, size, plain_text, raw_html, fetched)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		(folder_id, uid, message_id, in_reply_to, refs, subject, sender, sender_addr,
+		 recipients, cc, date, unread, has_attachment, size, thread_id,
+		 plain_text, raw_html, fetched)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(folder_id, uid) DO UPDATE SET
 			message_id=excluded.message_id, subject=excluded.subject,
 			sender=excluded.sender, sender_addr=excluded.sender_addr,
 			recipients=excluded.recipients, cc=excluded.cc, date=excluded.date,
-			has_attachment=excluded.has_attachment, size=excluded.size`,
-		m.FolderID, m.UID, m.MessageID, m.Subject, m.Sender, m.SenderAddr,
-		m.Recipients, m.Cc, m.Date, boolInt(m.Unread), boolInt(m.HasAttachment),
-		m.Size, plain, raw, fetched)
+			has_attachment=excluded.has_attachment, size=excluded.size,
+			in_reply_to=CASE WHEN excluded.in_reply_to!='' THEN excluded.in_reply_to ELSE messages.in_reply_to END,
+			refs=CASE WHEN excluded.refs!='' THEN excluded.refs ELSE messages.refs END,
+			thread_id=CASE WHEN messages.thread_id='' THEN excluded.thread_id ELSE messages.thread_id END`,
+		m.FolderID, m.UID, m.MessageID, m.InReplyTo, m.Refs, m.Subject, m.Sender,
+		m.SenderAddr, m.Recipients, m.Cc, m.Date, boolInt(m.Unread),
+		boolInt(m.HasAttachment), m.Size, threadID, plain, raw, fetched)
 	if err != nil {
 		return 0, fmt.Errorf("simpan pesan uid=%d folder=%d: %w", m.UID, m.FolderID, err)
 	}
@@ -364,15 +391,12 @@ func (db *DB) DeleteMessage(id int64) error {
 // ListMessages mengembalikan pesan pada folder, terbaru dulu. Bila query
 // tidak kosong, hasil difilter lewat FTS5.
 func (db *DB) ListMessages(folderID int64, query string) ([]MessageHeader, error) {
-	const cols = `id, folder_id, uid, COALESCE(message_id,''), COALESCE(subject,''),
-		COALESCE(sender,''), COALESCE(sender_addr,''), COALESCE(recipients,''),
-		COALESCE(cc,''), COALESCE(date,''), unread, has_attachment, size`
 	var (
 		rows *sql.Rows
 		err  error
 	)
 	if query == "" {
-		rows, err = db.Query(`SELECT `+cols+` FROM messages
+		rows, err = db.Query(`SELECT `+headerCols+` FROM messages
 			WHERE folder_id=? ORDER BY date DESC, uid DESC`, folderID)
 	} else {
 		// FTS-driven: ambil rowid hasil MATCH dulu, lalu ambil baris per
@@ -406,6 +430,99 @@ func (db *DB) ListMessages(folderID int64, query string) ([]MessageHeader, error
 	return scanHeaders(rows)
 }
 
+// ListThreadSummaries mengembalikan satu baris per thread folder: pesan
+// terbaru tiap thread (IsThreadLatest=true) beserta jumlah anggota thread
+// (ThreadCount), terurut pesan terbaru dulu. Query pencarian (FTS5) tetap
+// menampilkan pesan per baris tanpa agregasi thread.
+func (db *DB) ListThreadSummaries(folderID int64, query string) ([]MessageHeader, error) {
+	if query != "" {
+		return db.ListMessages(folderID, query)
+	}
+	// Pesan terbaru tiap thread via subquery terindeks (folder, thread, date,
+	// uid) + hitungan anggota lewat GROUP BY pada index yang sama; tanpa
+	// memindai tabel di luar folder. Kolom thread_id di-qualify karena join
+	// membuatnya ambigu.
+	mCols := strings.ReplaceAll(headerCols, "COALESCE(thread_id,'')",
+		"COALESCE(m.thread_id,'')")
+	rows, err := db.Query(`SELECT `+mCols+`, t.cnt, 1
+		FROM messages m
+		JOIN (
+			SELECT thread_id, COUNT(*) AS cnt
+			FROM messages WHERE folder_id=? GROUP BY thread_id
+		) t ON t.thread_id = m.thread_id
+		WHERE m.folder_id=? AND m.id = (
+			SELECT m2.id FROM messages m2
+			WHERE m2.folder_id = m.folder_id AND m2.thread_id = m.thread_id
+			ORDER BY m2.date DESC, m2.uid DESC LIMIT 1
+		)
+		ORDER BY m.date DESC, m.uid DESC`, folderID, folderID)
+	if err != nil {
+		return nil, fmt.Errorf("daftar thread folder %d: %w", folderID, err)
+	}
+	defer rows.Close()
+	var out []MessageHeader
+	for rows.Next() {
+		h := MessageHeader{}
+		// Dua kolom agregasi ekstra (t.cnt, 1) menimpa hasil headerCols.
+		var cnt, latest int
+		if err := scanHeaderRow(func(dst ...any) error {
+			args := make([]any, 0, len(dst)+2)
+			args = append(args, dst...)
+			args = append(args, &cnt, &latest)
+			return rows.Scan(args...)
+		}, &h); err != nil {
+			return nil, fmt.Errorf("baca thread: %w", err)
+		}
+		h.ThreadCount, h.IsThreadLatest = cnt, latest == 1
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
+// SetMessageThreadHeaders melengkapi header reply pesan dari hasil parsing
+// raw (dipanggil saat body di-fetch lazy). Hanya kolom yang masih kosong
+// yang diisi agar data dari sync tidak tertimpa. Setelah header terisi,
+// thread folder dihitung ulang (regroup) agar rantai reply tersatukan.
+func (db *DB) SetMessageThreadHeaders(id int64, messageID, inReplyTo, refs string) error {
+	var folderID int64
+	var curMid, curIrt, curRefs, curSubj, curThread string
+	err := db.QueryRow(`SELECT folder_id, COALESCE(message_id,''),
+			COALESCE(in_reply_to,''), COALESCE(refs,''), COALESCE(subject,''),
+			COALESCE(thread_id,'')
+		FROM messages WHERE id=?`, id).
+		Scan(&folderID, &curMid, &curIrt, &curRefs, &curSubj, &curThread)
+	if err != nil {
+		return fmt.Errorf("baca header pesan %d: %w", id, err)
+	}
+	if curMid == "" {
+		curMid = strings.TrimSpace(messageID)
+	}
+	if curIrt == "" {
+		curIrt = strings.TrimSpace(inReplyTo)
+	}
+	if curRefs == "" {
+		curRefs = strings.Join(strings.Fields(refs), " ")
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("mulai tx header pesan %d: %w", id, err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE messages SET message_id=?, in_reply_to=?, refs=?
+		WHERE id=?`, curMid, curIrt, curRefs, id); err != nil {
+		return fmt.Errorf("lengkapi header thread pesan %d: %w", id, err)
+	}
+	// thread_id dihitung ulang seluruh folder: header baru bisa menyatukan
+	// atau memecah thread (regroup deterministik & idempoten).
+	if err := regroupThreadsTx(tx, folderID); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit header pesan %d: %w", id, err)
+	}
+	return nil
+}
+
 // selectFTSRowIDs mengembalikan rowid pesan yang cocok query FTS.
 func (db *DB) selectFTSRowIDs(query string) ([]int64, error) {
 	rows, err := db.Query(`SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?`,
@@ -433,10 +550,7 @@ func (db *DB) fetchByIDs(folderID int64, ids []int64) (*sql.Rows, error) {
 	for _, id := range ids {
 		args = append(args, id)
 	}
-	const cols = `id, folder_id, uid, COALESCE(message_id,''), COALESCE(subject,''),
-		COALESCE(sender,''), COALESCE(sender_addr,''), COALESCE(recipients,''),
-		COALESCE(cc,''), COALESCE(date,''), unread, has_attachment, size`
-	rows, err := db.Query(`SELECT `+cols+` FROM messages
+	rows, err := db.Query(`SELECT `+headerCols+` FROM messages
 		WHERE folder_id=? AND id IN (`+ph[:len(ph)-1]+`)`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("ambil pesan batch: %w", err)
@@ -456,10 +570,7 @@ func sortMessageHeaders(m []MessageHeader) {
 
 // GetMessage mengembalikan header dan isi satu pesan.
 func (db *DB) GetMessage(id int64) (*MessageHeader, *MessageBody, error) {
-	h, err := db.queryHeader(`SELECT id, folder_id, uid, COALESCE(message_id,''),
-			COALESCE(subject,''), COALESCE(sender,''), COALESCE(sender_addr,''),
-			COALESCE(recipients,''), COALESCE(cc,''), COALESCE(date,''), unread, has_attachment, size
-		FROM messages WHERE id=?`, id)
+	h, err := db.queryHeader(`SELECT `+headerCols+` FROM messages WHERE id=?`, id)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -481,16 +592,28 @@ func (db *DB) MarkRead(id int64, read bool) error {
 	return nil
 }
 
-// queryHeader menjalankan query satu baris header.
-func (db *DB) queryHeader(q string, args ...any) (*MessageHeader, error) {
-	row := db.QueryRow(q, args...)
-	h := &MessageHeader{}
-	var unread, att int
-	if err := row.Scan(&h.ID, &h.FolderID, &h.UID, &h.MessageID, &h.Subject,
-		&h.Sender, &h.SenderAddr, &h.Recipients, &h.Cc, &h.Date, &unread, &att, &h.Size); err != nil {
-		return nil, fmt.Errorf("baca header pesan: %w", err)
+// scanHeaderRow memindai satu baris header sesuai urutan headerCols plus
+// dua kolom agregasi thread (thread_count, is_thread_latest).
+func scanHeaderRow(scan func(...any) error, h *MessageHeader) error {
+	var unread, att, cnt, latest int
+	if err := scan(&h.ID, &h.FolderID, &h.UID, &h.MessageID, &h.InReplyTo, &h.Refs,
+		&h.Subject, &h.Sender, &h.SenderAddr, &h.Recipients, &h.Cc, &h.Date,
+		&unread, &att, &h.Size, &h.ThreadID, &cnt, &latest); err != nil {
+		return err
 	}
 	h.Unread, h.HasAttachment = unread == 1, att == 1
+	h.ThreadCount, h.IsThreadLatest = cnt, latest == 1
+	return nil
+}
+
+// queryHeader menjalankan query satu baris header.
+func (db *DB) queryHeader(q string, args ...any) (*MessageHeader, error) {
+	h := &MessageHeader{}
+	if err := scanHeaderRow(func(dst ...any) error {
+		return db.QueryRow(q, args...).Scan(dst...)
+	}, h); err != nil {
+		return nil, fmt.Errorf("baca header pesan: %w", err)
+	}
 	return h, nil
 }
 
@@ -498,12 +621,9 @@ func scanHeaders(rows *sql.Rows) ([]MessageHeader, error) {
 	var out []MessageHeader
 	for rows.Next() {
 		h := MessageHeader{}
-		var unread, att int
-		if err := rows.Scan(&h.ID, &h.FolderID, &h.UID, &h.MessageID, &h.Subject,
-			&h.Sender, &h.SenderAddr, &h.Recipients, &h.Cc, &h.Date, &unread, &att, &h.Size); err != nil {
+		if err := scanHeaderRow(rows.Scan, &h); err != nil {
 			return nil, fmt.Errorf("baca pesan: %w", err)
 		}
-		h.Unread, h.HasAttachment = unread == 1, att == 1
 		out = append(out, h)
 	}
 	return out, rows.Err()
