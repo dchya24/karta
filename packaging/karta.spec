@@ -7,7 +7,7 @@ Version:        %{_version}
 Release:        1%{?dist}
 Summary:        Email client desktop native yang cepat dan ringan
 
-License:        Proprietary
+License:        MIT
 URL:            https://github.com/dchya24/karta
 Source0:        %{_bindir_src}
 Source1:        %{_desktop_src}

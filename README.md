@@ -13,9 +13,21 @@ Inti layanannya (IMAP/SMTP, parser MIME, SQLite FTS5) terpisah bersih dari lapis
 - **Pencarian instan** berbasis SQLite FTS5 atas subjek, pengirim, dan isi pesan — hasil di bawah 50 ms pada 10.000 email.
 - **Aksi cepat pesan** — Arsip, Hapus (ke Trash), Tandai Baca/Belum, Balas, Balas Semua, Teruskan, simpan lampiran, *Open in Browser* fallback HTML.
 - **Sinkronisasi realtime** — IMAP IDLE push dengan fallback polling 5 menit, backoff eksponensial.
-- **OAuth Google (Gmail)** — login satu klik via browser, token disimpan aman di OS keyring (`go-keyring`), bukan di file/database; deteksi token kedaluwarsa/izin hilang dengan tombol *Login ulang*.
+- **Login Google tanpa konfigurasi** — cukup satu klik, tanpa membuat OAuth client di Google Console.
+- **OAuth Google (Gmail)** — token disimpan aman di OS keyring (`go-keyring`), bukan di file/database; deteksi token kedaluwarsa/izin hilang dengan tombol *Login ulang*.
 - **Tema terang/gelap** dengan warna brand sendiri, preferensi disimpan di `prefs.json`.
 - **Multi-akun** — tambah/hapus akun IMAP (password atau OAuth2) dari dalam aplikasi.
+
+### Cara kerja login Google (OAuth relay)
+
+Karta tidak menyimpan `client_secret` Google di dalam aplikasi. Secret itu ada di layanan relay kecil stateless ([`server/`](server/README.md), open source di repo ini juga) yang dipasang di `https://karta.devchya.id`:
+
+1. Karta minta `client_id` dari relay (`GET /oauth/config`).
+2. Browser membuka halaman consent Google dan kembali ke callback lokal `http://127.0.0.1:8699` (PKCE, sesuai RFC 8252 — aplikasi desktop memang wajib redirect ke loopback).
+3. Karta menukar `code` menjadi token lewat relay (`POST /oauth/exchange`) — relay menambahkan `client_secret` milik server, mem-proxy ke Google, dan **tidak menyimpan apa pun**.
+4. Access & refresh token hanya disimpan di **OS keyring** komputermu. Server tidak menyimpan token, code, atau state apa pun.
+
+Untuk development, mode lokal tetap didukung: set `KARTA_OAUTH_CLIENT_ID`/`KARTA_OAUTH_CLIENT_SECRET` (env) atau `~/.config/karta/oauth.json`, maka Karta bertukar token langsung dengan Google tanpa relay.
 
 ## Unduh & Instalasi
 
@@ -77,3 +89,7 @@ Tag `v*` yang di-push memicu workflow [release.yml](.github/workflows/release.ym
 - [PRD.md](PRD.md) — kebutuhan produk & ruang lingkup.
 - [docs/DESIGN.md](docs/DESIGN.md) — keputusan teknis & arsitektur UI.
 - [AGENTS.md](AGENTS.md) — aturan kontribusi untuk coding agents.
+
+## Lisensi
+
+Karta dirilis di bawah [Lisensi MIT](LICENSE).

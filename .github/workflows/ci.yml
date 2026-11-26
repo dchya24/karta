@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+jobs:
+  app:
+    name: Aplikasi (internal/)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build (CGO_ENABLED=0)
+        run: CGO_ENABLED=0 go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: CGO_ENABLED=0 go test ./internal/... -count=1
+
+      - name: Test race (sync + app)
+        run: go test -race ./internal/sync/... ./internal/app/... -count=1
+
+  server:
+    name: Relay OAuth (server/)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+
+      - name: Build (CGO_ENABLED=0)
+        run: cd server && CGO_ENABLED=0 go build ./...
+
+      - name: Vet
+        run: cd server && go vet ./...
+
+      - name: Test
+        run: cd server && go test ./... -count=1

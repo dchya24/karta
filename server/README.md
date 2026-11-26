@@ -83,3 +83,7 @@ services:
 ```
 
 Catatan: endpoint ini terbuka publik; pastikan hanya `POST /oauth/exchange` dan `GET /oauth/config` yang terekspos, dan pertimbangkan rate limit tambahan di edge proxy.
+
+## Lisensi
+
+Relay ini bagian dari proyek [Karta](https://github.com/dchya24/karta) dan berlisensi MIT.
