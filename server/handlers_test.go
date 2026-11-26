@@ -283,6 +283,50 @@ func TestRateLimitWindowResets(t *testing.T) {
 
 // --- routes & unknown path ---
 
+func TestLandingPage(t *testing.T) {
+	h, _ := newTestHandler(t, nil)
+	srv := httptest.NewServer(h.routes())
+	t.Cleanup(srv.Close)
+
+	resp, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, mau 200", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Fatalf("Content-Type = %q, mau text/html", ct)
+	}
+	if !strings.Contains(string(body), "Karta") || !strings.Contains(string(body), "main-light.png") || strings.Contains(string(body), "/oauth/exchange") {
+		t.Fatalf("landing page tidak memuat konten Karta yang diharapkan")
+	}
+
+	for _, imgPath := range []string{"/main-light.png", "/main-dark.png"} {
+		imgResp, err := http.Get(srv.URL + imgPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		imgBytes, _ := io.ReadAll(imgResp.Body)
+		imgResp.Body.Close()
+		if imgResp.StatusCode != http.StatusOK || imgResp.Header.Get("Content-Type") != "image/png" || len(imgBytes) == 0 {
+			t.Fatalf("%s: status=%d ct=%q len=%d", imgPath, imgResp.StatusCode, imgResp.Header.Get("Content-Type"), len(imgBytes))
+		}
+	}
+
+	postResp, err := http.Post(srv.URL+"/", "text/plain", strings.NewReader("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	postResp.Body.Close()
+	if postResp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("POST / status = %d, mau 405", postResp.StatusCode)
+	}
+}
+
 func TestUnknownPath(t *testing.T) {
 	h, _ := newTestHandler(t, nil)
 	srv := httptest.NewServer(h.routes())

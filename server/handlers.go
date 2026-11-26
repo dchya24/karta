@@ -1,6 +1,7 @@
 package main
 
 import (
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,10 +13,22 @@ import (
 	"time"
 )
 
+//go:embed landing.html
+var landingHTML []byte
+
+//go:embed main-light.png
+var mainLightPNG []byte
+
+//go:embed main-dark.png
+var mainDarkPNG []byte
+
 // Konstanta endpoint relay.
 const (
-	pathConfig   = "/oauth/config"
-	pathExchange = "/oauth/exchange"
+	pathLanding   = "/"
+	pathMainLight = "/main-light.png"
+	pathMainDark  = "/main-dark.png"
+	pathConfig    = "/oauth/config"
+	pathExchange  = "/oauth/exchange"
 
 	// maxExchangeBytes adalah batas ukuran body /oauth/exchange.
 	maxExchangeBytes = 64 << 10
@@ -64,9 +77,36 @@ type oauthHandler struct {
 // routes menyusun mux endpoint relay.
 func (h *oauthHandler) routes() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc(pathLanding, h.handleLanding)
+	mux.HandleFunc(pathMainLight, serveStatic("image/png", mainLightPNG))
+	mux.HandleFunc(pathMainDark, serveStatic("image/png", mainDarkPNG))
 	mux.HandleFunc(pathConfig, h.handleConfig)
 	mux.HandleFunc(pathExchange, h.handleExchange)
 	return mux
+}
+
+func serveStatic(contentType string, data []byte) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			writeErrorJSON(w, http.StatusMethodNotAllowed, "method tidak diizinkan")
+			return
+		}
+		w.Header().Set("Content-Type", contentType)
+		w.WriteHeader(http.StatusOK)
+		if r.Method == http.MethodGet {
+			w.Write(data)
+		}
+	}
+}
+
+// handleLanding melayani GET / dengan halaman landing HTML Karta.
+func (h *oauthHandler) handleLanding(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != pathLanding {
+		http.NotFound(w, r)
+		return
+	}
+	serveStatic("text/html; charset=utf-8", landingHTML)(w, r)
 }
 
 // writeJSON menulis JSON dengan status code yang diberikan.

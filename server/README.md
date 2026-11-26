@@ -6,6 +6,10 @@ Layanan relay Google OAuth untuk aplikasi desktop [Karta](https://github.com/dch
 
 Kontrak ini dipakai bersama `internal/app/oauthrelay.go` di repo utama.
 
+### `GET /`
+
+Menyajikan landing page HTML statis aplikasi desktop Karta beserta screenshot tema terang/gelap (`/main-light.png`, `/main-dark.png`) yang di-embed langsung ke dalam binary.
+
 ### `GET /oauth/config`
 
 ```json

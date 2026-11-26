@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light dark">
+  <title>Karta — Native Desktop Email Client</title>
+  <style>
+    @layer theme, base;
+
+    @layer theme {
+      :root {
+        --bg-light: #f8fafc;
+        --bg-dark: #111827;
+        --surface-light: #ffffff;
+        --surface-dark: #1e293b;
+        --border-light: #e2e8f0;
+        --border-dark: #334155;
+        --text-light: #111827;
+        --text-dark: #f8fafc;
+        --muted-light: #475569;
+        --muted-dark: #94a3b8;
+        --accent-light: #0284c7;
+        --accent-dark: #00add8;
+        --accent-fg-light: #ffffff;
+        --accent-fg-dark: #0b1220;
+
+        --bg: var(--bg-light);
+        --surface: var(--surface-light);
+        --border: var(--border-light);
+        --text: var(--text-light);
+        --muted: var(--muted-light);
+        --accent: var(--accent-light);
+        --accent-fg: var(--accent-fg-light);
+
+        @media (prefers-color-scheme: dark) {
+          --bg: var(--bg-dark);
+          --surface: var(--surface-dark);
+          --border: var(--border-dark);
+          --text: var(--text-dark);
+          --muted: var(--muted-dark);
+          --accent: var(--accent-dark);
+          --accent-fg: var(--accent-fg-dark);
+        }
+
+        @supports (color: light-dark(white, black)) {
+          --bg: light-dark(var(--bg-light), var(--bg-dark));
+          --surface: light-dark(var(--surface-light), var(--surface-dark));
+          --border: light-dark(var(--border-light), var(--border-dark));
+          --text: light-dark(var(--text-light), var(--text-dark));
+          --muted: light-dark(var(--muted-light), var(--muted-dark));
+          --accent: light-dark(var(--accent-light), var(--accent-dark));
+          --accent-fg: light-dark(var(--accent-fg-light), var(--accent-fg-dark));
+        }
+
+        color-scheme: light dark;
+      }
+    }
+
+    @layer base {
+      html, body, main, header, footer, figure, figcaption, h1, p, a, code, img {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        font-family: system-ui, -apple-system, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        line-height: 1.6;
+        min-block-size: 100dvh;
+        display: grid;
+        place-items: center;
+        padding: 1.5rem;
+      }
+
+      main {
+        inline-size: min(760px, 100%);
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 2rem;
+        display: flex;
+        flex-direction: column;
+        gap: 1.25rem;
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        gap: 0.85rem;
+      }
+
+      h1 {
+        font-size: 1.5rem;
+        letter-spacing: -0.02em;
+      }
+
+      p {
+        color: var(--muted);
+        font-size: 0.95rem;
+      }
+
+      .actions {
+        display: flex;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+      }
+
+      .btn {
+        padding-block: 0.55rem;
+        padding-inline: 1rem;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 0.9rem;
+        text-decoration: none;
+        border: 1px solid var(--border);
+        color: var(--text);
+      }
+
+      .btn-primary {
+        background: var(--accent);
+        color: var(--accent-fg);
+        border-color: transparent;
+      }
+
+      .screenshots {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 0.85rem;
+      }
+
+      figure {
+        display: flex;
+        flex-direction: column;
+        gap: 0.4rem;
+      }
+
+      figure img {
+        inline-size: 100%;
+        block-size: auto;
+        display: block;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+      }
+
+      figcaption {
+        font-size: 0.8rem;
+        color: var(--muted);
+        text-align: center;
+      }
+
+      code {
+        font-family: ui-monospace, monospace;
+        font-size: 0.85rem;
+        color: var(--text);
+      }
+
+      footer {
+        font-size: 0.8rem;
+        color: var(--muted);
+        border-block-start: 1px solid var(--border);
+        padding-block-start: 1rem;
+      }
+
+      footer a {
+        color: var(--accent);
+        text-decoration: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <svg width="40" height="40" viewBox="0 0 512 512" fill="none" role="img" aria-label="Logo Karta">
+        <rect x="24" y="24" width="464" height="464" rx="108" fill="#111827" stroke="#334155" stroke-width="12"/>
+        <path d="M156 144V368" stroke="#F8FAFC" stroke-width="46" stroke-linecap="round"/>
+        <path d="M356 144L224 256L356 368" stroke="#00ADD8" stroke-width="46" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="356" cy="256" r="22" fill="#F8FAFC"/>
+      </svg>
+      <div>
+        <h1>Karta</h1>
+        <p>Pure Native Desktop Email Client</p>
+      </div>
+    </header>
+
+    <p>
+      Email client desktop ringan berbasis Go dan GPU UI (<code>mygo/ui</code>) tanpa Electron atau WebView. Dilengkapi pencarian SQLite FTS5 instan, IMAP IDLE, login Google satu klik, dan penyimpanan kredensial di OS Keyring.
+    </p>
+
+    <div class="actions">
+      <a class="btn btn-primary" href="https://github.com/dchya24/karta/releases/latest">Unduh Rilis</a>
+      <a class="btn" href="https://github.com/dchya24/karta">GitHub</a>
+    </div>
+
+    <div class="screenshots">
+      <figure>
+        <img src="main-light.png" alt="Tampilan aplikasi desktop Karta tema terang" width="1100" height="720" fetchpriority="high">
+        <figcaption>Terang</figcaption>
+      </figure>
+      <figure>
+        <img src="main-dark.png" alt="Tampilan aplikasi desktop Karta tema gelap" width="1100" height="720" fetchpriority="high">
+        <figcaption>Gelap</figcaption>
+      </figure>
+    </div>
+
+    <footer>
+      Tersedia untuk Linux, macOS, dan Windows · <a href="https://github.com/dchya24/karta/blob/main/LICENSE">Lisensi MIT</a>
+    </footer>
+  </main>
+</body>
+</html>

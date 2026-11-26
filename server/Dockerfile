@@ -7,7 +7,7 @@
 FROM golang:1.27-alpine AS build
 WORKDIR /src
 COPY go.mod ./
-COPY *.go ./
+COPY *.go *.html *.png ./
 ENV CGO_ENABLED=0
 RUN go vet ./... && go test ./... && go build -trimpath -ldflags="-s -w" -o /out/relay-oauth .
 
