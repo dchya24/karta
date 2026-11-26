@@ -37,6 +37,33 @@ Untuk development, mode lokal tetap didukung: set `KARTA_OAUTH_CLIENT_ID`/`KARTA
 
 Semua aset tersedia di halaman [**Releases**](https://github.com/dchya24/karta/releases/latest).
 
+### Install sekali perintah
+
+**Linux / macOS** (bash):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/dchya24/karta/master/install.sh | bash
+```
+
+atau unduh dulu lalu jalankan (disarankan):
+
+```sh
+curl -fsSL -o install.sh https://raw.githubusercontent.com/dchya24/karta/master/install.sh
+bash install.sh            # rilis terbaru
+bash install.sh v0.3.1     # versi tertentu
+```
+
+Deteksi otomatis: `.deb` via dpkg, `.rpm` via dnf/rpm, selain itu portabel ke `~/.local/bin` + entri menu + ikon. macOS: `Karta.app` dipasang ke `/Applications` (quarantine dibersihkan otomatis karena belum ditandatangani).
+
+**Windows** (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/dchya24/karta/master/install.ps1 -OutFile install.ps1
+.\install.ps1              # wizard installer terbuka
+.\install.ps1 -Silent      # instal tanpa wizard
+.\install.ps1 -Version v0.3.1
+```
+
 ### Linux
 
 | Paket | Perintah |
