@@ -18,13 +18,17 @@ type ParsedAttachment struct {
 
 // Message adalah hasil parsing satu pesan MIME. PlainText selalu terisi
 // (dikonversi dari HTML bila pesan tidak punya text/plain); RawHTML disimpan
-// apa adanya hanya untuk fallback "Open in Browser".
+// apa adanya hanya untuk fallback "Open in Browser". Header identitas thread
+// (MessageID/InReplyTo/References) dipakai pengelompokan percakapan.
 type Message struct {
 	Subject     string
 	From        string
 	To          string
 	Cc          string
 	Date        time.Time
+	MessageID   string
+	InReplyTo   string
+	References  string
 	PlainText   string
 	RawHTML     string
 	Attachments []ParsedAttachment
@@ -49,6 +53,11 @@ func ParseMessage(raw []byte) (*Message, error) {
 	if d, err := r.Header.Date(); err == nil {
 		msg.Date = d
 	}
+	// Header identitas thread (Get case-insensitive; nilai mentah dipertahankan,
+	// normalisasi dilakukan di internal/store).
+	msg.MessageID = r.Header.Get("Message-Id")
+	msg.InReplyTo = r.Header.Get("In-Reply-To")
+	msg.References = r.Header.Get("References")
 
 	var plain, htmlBody string
 	for {

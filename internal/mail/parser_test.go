@@ -95,3 +95,35 @@ func TestParseMessageDate(t *testing.T) {
 		t.Fatalf("UTC %q, mau 03:00", got)
 	}
 }
+
+func TestParseMessageThreadHeaders(t *testing.T) {
+	raw := "From: budi@contoh.id\r\n" +
+		"Subject: Re: Rencana rilis\r\n" +
+		"Message-ID: <c@x.id>\r\n" +
+		"In-Reply-To: <b@x.id>\r\n" +
+		"References: <a@x.id> <b@x.id>\r\n" +
+		"Content-Type: text/plain; charset=utf-8\r\n\r\n" +
+		"isi\r\n"
+	m, err := ParseMessage([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Nilai mentah dipertahankan; normalisasi ada di internal/store.
+	if m.MessageID != "<c@x.id>" {
+		t.Fatalf("MessageID %q", m.MessageID)
+	}
+	if m.InReplyTo != "<b@x.id>" {
+		t.Fatalf("InReplyTo %q", m.InReplyTo)
+	}
+	if m.References != "<a@x.id> <b@x.id>" {
+		t.Fatalf("References %q", m.References)
+	}
+	// Pesan tanpa header reply sama sekali: kosong, bukan error.
+	plain, err := ParseMessage([]byte(plainMIME))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.MessageID != "" || plain.InReplyTo != "" || plain.References != "" {
+		t.Fatalf("header thread seharusnya kosong: %+v", plain)
+	}
+}

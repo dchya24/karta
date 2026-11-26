@@ -1,6 +1,8 @@
 package mail
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -8,6 +10,7 @@ import (
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
+	"github.com/emersion/go-message/textproto"
 )
 
 // IMAPConfig adalah parameter koneksi IMAP satu akun.
@@ -33,6 +36,7 @@ type HeaderInfo struct {
 	UID           uint32
 	MessageID     string
 	InReplyTo     string
+	Refs          string // header References mentah, dipisah spasi
 	Subject       string
 	Sender        string
 	SenderAddr    string
@@ -155,6 +159,13 @@ func (cl *Client) SyncFolder(ctx context.Context, mailbox string, lastUID uint32
 			InternalDate: true,
 			RFC822Size:   true,
 			UID:          true,
+			// References butuh FETCH BODY.PEEK[HEADER.FIELDS (REFERENCES)]:
+			// tidak ada di Envelope; dipakai identitas thread percakapan.
+			BodySection: []*imap.FetchItemBodySection{{
+				Specifier:    imap.PartSpecifierHeader,
+				HeaderFields: []string{"References"},
+				Peek:         true,
+			}},
 		}).Collect()
 		if err != nil {
 			return nil, 0, fmt.Errorf("FETCH header %s: %w", mailbox, err)
@@ -317,6 +328,11 @@ func headerFromFetch(m *imapclient.FetchMessageBuffer) HeaderInfo {
 	h := HeaderInfo{
 		UID: uint32(m.UID),
 	}
+	for _, sec := range m.BodySection {
+		if refs := headerFieldValue(sec.Bytes, "References"); refs != "" {
+			h.Refs = refs
+		}
+	}
 	if m.Envelope != nil {
 		env := m.Envelope
 		h.MessageID = env.MessageID
@@ -355,6 +371,19 @@ func hasFlag(flags []imap.Flag, want imap.Flag) bool {
 		}
 	}
 	return false
+}
+
+// headerFieldValue membaca satu field dari potongan header FETCH
+// (BODY[HEADER.FIELDS (...)]). Return kosong bila tidak ada/parsing gagal.
+func headerFieldValue(raw []byte, field string) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	h, err := textproto.ReadHeader(bufio.NewReader(bytes.NewReader(raw)))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(h.Get(field))
 }
 
 // formatAddrs mengembalikan pengirim pertama yang valid sebagai

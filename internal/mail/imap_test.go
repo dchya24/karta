@@ -92,3 +92,34 @@ func TestIdleMailboxCanceledContext(t *testing.T) {
 		t.Fatalf("err=%v, mau context.Canceled", err)
 	}
 }
+
+func TestHeaderFromFetchReferences(t *testing.T) {
+	date := time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC)
+	m := &imapclient.FetchMessageBuffer{
+		UID:          7,
+		InternalDate: date,
+		BodySection: []imapclient.FetchBodySectionBuffer{{
+			Bytes: []byte("References: <root@x.id> <r1@x.id>\r\n\r\n"),
+		}},
+		Envelope: &imap.Envelope{MessageID: "<r2@x.id>", Subject: "Re: Topik"},
+	}
+	h := headerFromFetch(m)
+	if h.Refs != "<root@x.id> <r1@x.id>" {
+		t.Fatalf("Refs %q", h.Refs)
+	}
+	// Tanpa bagian header: tidak error, Refs kosong.
+	m2 := &imapclient.FetchMessageBuffer{UID: 1, InternalDate: date}
+	if h2 := headerFromFetch(m2); h2.Refs != "" {
+		t.Fatalf("Refs %q, mau kosong", h2.Refs)
+	}
+}
+
+func TestHeaderFieldValueCaseInsensitive(t *testing.T) {
+	raw := []byte("REFERENces: <a@x>\r\n\r\n")
+	if got := headerFieldValue(raw, "References"); got != "<a@x>" {
+		t.Fatalf("got %q", got)
+	}
+	if got := headerFieldValue([]byte("\r\n"), "References"); got != "" {
+		t.Fatalf("got %q", got)
+	}
+}
