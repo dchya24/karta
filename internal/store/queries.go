@@ -221,6 +221,34 @@ func (db *DB) ListAttachments(messageID int64) ([][2]string, error) {
 	return out, rows.Err()
 }
 
+// AttachmentBlob adalah lampiran beserta isi blob-nya (untuk ekspor).
+type AttachmentBlob struct {
+	Filename    string
+	ContentType string
+	Data        []byte
+}
+
+// ListAttachmentBlobs mengembalikan lampiran satu pesan beserta isi blob-nya.
+// Lampiran tanpa BLOB (data NULL) tetap dikembalikan dengan Data nil agar
+// metadata tidak hilang.
+func (db *DB) ListAttachmentBlobs(messageID int64) ([]AttachmentBlob, error) {
+	rows, err := db.Query(`SELECT filename, COALESCE(content_type,''), data
+		FROM attachments WHERE message_id=? ORDER BY id`, messageID)
+	if err != nil {
+		return nil, fmt.Errorf("daftar lampiran pesan %d: %w", messageID, err)
+	}
+	defer rows.Close()
+	var out []AttachmentBlob
+	for rows.Next() {
+		var a AttachmentBlob
+		if err := rows.Scan(&a.Filename, &a.ContentType, &a.Data); err != nil {
+			return nil, fmt.Errorf("baca lampiran: %w", err)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 // InsertAttachment menyimpan satu lampiran pesan.
 func (db *DB) InsertAttachment(messageID int64, filename, contentType string, data []byte) error {
 	if _, err := db.Exec(`INSERT INTO attachments (message_id, filename, content_type, size, data)
