@@ -24,7 +24,7 @@ karta/
 │   ├── mail/                # Protokol IMAP, SMTP, dan MIME parser
 │   ├── store/               # SQLite repository, migrasi skema, dan query FTS5
 │   ├── sync/                # Background goroutine untuk sinkronisasi email
-│   └── bridge/              # (Stub/Masa Depan) IPC local socket untuk integrasi Takka (Rust)
+
 ```
 
 Pemetaan widget: layout 3-pane = `ui.Split` bersarang; sidebar = `ui.Sidebar`; daftar pesan = `ui.List` (virtualisasi bawaan); reading pane = `ui.Editor`/`richtext` dengan `ui.Link`; dialog lampiran = DialogModule (`Save`/`Open`); shortcut = `Context.OnWindowShortcut`; dispatch ke main thread = `ui.RunOnMain` / `postMain`. Lihat `docs/DESIGN.md` untuk detail.
@@ -36,7 +36,7 @@ Pemetaan widget: layout 3-pane = `ui.Split` bersarang; sidebar = `ui.Sidebar`; d
 ### A. Pemisahan Layer (Strict Layering)
 1. `internal/mail` dan `internal/store` **TIDAK BOLEH** mengimpor `internal/ui` atau `github.com/egoist/mygo`.
 2. `internal/ui` **TIDAK BOLEH** menjalankan query SQL atau koneksi jaringan IMAP/SMTP secara langsung. Semua aksi user harus memanggil method pada `internal/app.Service`.
-3. `internal/app` bertindak sebagai *facade* utama. Desain method dan struct DTO pada `internal/app` harus bersih dan serializable (JSON-friendly) agar mudah diekspos ke `internal/bridge` (IPC ke Rust/Takka) di masa mendatang.
+3. `internal/app` bertindak sebagai *facade* utama. Desain method dan struct DTO pada `internal/app` harus bersih dan serializable (JSON-friendly), siap diekspos lewat IPC ke Takka (Rust) di masa mendatang.
 
 ### B. Thread Safety & GUI Main Thread (`mygo`)
 - Operasi GUI native **wajib berjalan di Main Thread**.

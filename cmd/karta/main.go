@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"karta/internal/app"
-	"karta/internal/bridge"
 	"karta/internal/store"
 	"karta/internal/ui"
 )
@@ -41,9 +40,6 @@ func main() {
 	svc := app.New(db)
 	defer svc.Close()
 
-	if err := bridge.Start(); err != nil {
-		log.Printf("bridge: %v", err)
-	}
 	ui.SetReadyLogger(func() {
 		log.Printf("karta: jendela siap dalam %s", time.Since(startTime))
 	})
