@@ -305,7 +305,7 @@ func TestLandingPage(t *testing.T) {
 		t.Fatalf("landing page tidak memuat konten Karta yang diharapkan")
 	}
 
-	for _, imgPath := range []string{"/main-light.png", "/main-dark.png"} {
+	for _, imgPath := range []string{"/main-light.png", "/main-dark.png", "/composer.png"} {
 		imgResp, err := http.Get(srv.URL + imgPath)
 		if err != nil {
 			t.Fatal(err)
@@ -314,6 +314,21 @@ func TestLandingPage(t *testing.T) {
 		imgResp.Body.Close()
 		if imgResp.StatusCode != http.StatusOK || imgResp.Header.Get("Content-Type") != "image/png" || len(imgBytes) == 0 {
 			t.Fatalf("%s: status=%d ct=%q len=%d", imgPath, imgResp.StatusCode, imgResp.Header.Get("Content-Type"), len(imgBytes))
+		}
+	}
+
+	if strings.Contains(string(body), "fonts.googleapis.com") {
+		t.Fatalf("landing page tidak boleh memuat font dari pihak ketiga")
+	}
+	for _, name := range []string{"bricolage-grotesque", "ibm-plex-sans", "jetbrains-mono"} {
+		fontResp, err := http.Get(srv.URL + "/fonts/" + name + ".woff2")
+		if err != nil {
+			t.Fatal(err)
+		}
+		fontBytes, _ := io.ReadAll(fontResp.Body)
+		fontResp.Body.Close()
+		if fontResp.StatusCode != http.StatusOK || len(fontBytes) == 0 || !strings.Contains(fontResp.Header.Get("Cache-Control"), "immutable") {
+			t.Fatalf("font %s: status=%d len=%d cc=%q", name, fontResp.StatusCode, len(fontBytes), fontResp.Header.Get("Cache-Control"))
 		}
 	}
 

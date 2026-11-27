@@ -1,11 +1,12 @@
 package main
 
 import (
-	_ "embed"
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
@@ -22,11 +23,19 @@ var mainLightPNG []byte
 //go:embed main-dark.png
 var mainDarkPNG []byte
 
+//go:embed fonts/*.woff2
+var fontsEmbed embed.FS
+
+//go:embed composer.png
+var composerPNG []byte
+
 // Konstanta endpoint relay.
 const (
 	pathLanding   = "/"
 	pathMainLight = "/main-light.png"
 	pathMainDark  = "/main-dark.png"
+	pathComposer  = "/composer.png"
+	pathFonts     = "/fonts/"
 	pathConfig    = "/oauth/config"
 	pathExchange  = "/oauth/exchange"
 
@@ -80,9 +89,24 @@ func (h *oauthHandler) routes() http.Handler {
 	mux.HandleFunc(pathLanding, h.handleLanding)
 	mux.HandleFunc(pathMainLight, serveStatic("image/png", mainLightPNG))
 	mux.HandleFunc(pathMainDark, serveStatic("image/png", mainDarkPNG))
+	mux.HandleFunc(pathComposer, serveStatic("image/png", composerPNG))
+	mux.Handle(pathFonts, fontsHandler())
 	mux.HandleFunc(pathConfig, h.handleConfig)
 	mux.HandleFunc(pathExchange, h.handleExchange)
 	return mux
+}
+
+// fontsHandler melayani font woff2 yang di-embed, dengan cache panjang.
+func fontsHandler() http.Handler {
+	sub, err := fs.Sub(fontsEmbed, "fonts")
+	if err != nil {
+		panic(fmt.Errorf("sub fonts embed: %w", err))
+	}
+	files := http.StripPrefix(pathFonts, http.FileServer(http.FS(sub)))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		files.ServeHTTP(w, r)
+	})
 }
 
 func serveStatic(contentType string, data []byte) http.HandlerFunc {
