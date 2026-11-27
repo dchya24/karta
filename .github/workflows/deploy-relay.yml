@@ -39,6 +39,7 @@ jobs:
         run: |
           install -m 600 /dev/null /tmp/id_ed25519
           printf '%s' "$SSH_KEY" > /tmp/id_ed25519
+          mkdir -p ~/.ssh && touch ~/.ssh/known_hosts
           ssh-keyscan -H "$RELAY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
       - name: Upload binary & restart service
