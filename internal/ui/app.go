@@ -116,6 +116,11 @@ type state struct {
 	delAcc     app.Account // akun yang menunggu konfirmasi
 	delAccOpen bool
 
+	// mode pilih bulk: set ID pesan yang ditandai di daftar (toggle dengan
+	// tombol x). Kosong = mode normal, shortcut lama berlaku penuh.
+	bulkSel     map[int]bool
+	bulkDelOpen bool // modal konfirmasi hapus bulk
+
 	// composer
 	composerOpen              bool
 	composerMode              string // new | reply | forward
@@ -257,6 +262,7 @@ func (s *state) reloadFolders() {
 // Tanpa query: satu baris per thread (pesan terbarunya) dengan jumlah anggota.
 // Dengan query: hasil pencarian flat per pesan (ListThreads delegasi FTS).
 func (s *state) reloadMessages() {
+	s.clearBulk() // pindah folder / reload daftar selalu kosongkan pilihan bulk
 	msgs, err := s.svc.ListThreads(s.folder, s.query)
 	if err != nil {
 		log.Printf("ui: pesan: %v", err)
@@ -545,6 +551,13 @@ func (s *state) view(c *ui.Context) {
 						s.openComposer("new")
 					}
 				})
+				// Baris aksi bulk: tampil hanya saat set pilihan tidak kosong.
+				if n := s.bulkCount(); n > 0 {
+					ui.Row(c).Padding(2, 10).Gap(8).AlignItems(ui.Center).Children(func() {
+						ui.Textf(c, "%d terpilih: [A]rsip  [D]elete  [x]Batal", n).
+							TextColor(t.Accent).FontSize(12)
+					})
+				}
 				s.list.Selected = &s.selected
 				ui.List(c, &s.list, len(s.msgs), func(i int) { s.row(c, i) }).
 					Grow(1).Children(func() {
@@ -561,6 +574,7 @@ func (s *state) view(c *ui.Context) {
 	})
 
 	s.deleteAccountModal(c)
+	s.bulkDeleteModal(c)
 }
 
 // welcome menggambar layar sambutan pertama kali: logo, nama app, tagline,
@@ -722,9 +736,13 @@ func (s *state) row(c *ui.Context, i int) {
 		weight = 700
 	}
 	chosen := i == s.selected
+	bulk := s.bulkSel[m.ID]
 	suffix := ""
 	if m.HasAttachment {
 		suffix = " 📎"
+	}
+	if bulk {
+		suffix = " ✔" + suffix
 	}
 	ui.Row(c).Padding(8, 10).Gap(8).Children(func() {
 		// Dot penanda belum dibaca; bold saja kurang cepat discan.
@@ -734,7 +752,11 @@ func (s *state) row(c *ui.Context, i int) {
 		ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
 			senderText := ui.Textf(c, "%s%s", sender, suffix).FontWeight(weight).Grow(0)
 			subjectText := ui.Textf(c, "%s", subject).FontSize(12)
-			if chosen {
+			if bulk {
+				// Ditandai bulk: accent, menang atas warna seleksi baris.
+				senderText.TextColor(t.Accent)
+				subjectText.TextColor(t.Accent)
+			} else if chosen {
 				// Di atas latar seleksi: teks terang, bukan muted.
 				senderText.TextColor(t.AccentText)
 				subjectText.TextColor(t.AccentText)
@@ -758,6 +780,130 @@ func (s *state) row(c *ui.Context, i int) {
 				dateText.TextColor(t.TextMuted)
 			}
 		}
+	})
+}
+
+// bulkCount jumlah pesan dalam set pilihan bulk.
+func (s *state) bulkCount() int { return len(s.bulkSel) }
+
+// bulkIDs mengembalikan ID pesan terpilih dalam urutan tampil di daftar
+// (urutan input Service = urutan eksekusi).
+func (s *state) bulkIDs() []int {
+	ids := make([]int, 0, len(s.bulkSel))
+	for _, m := range s.msgs {
+		if s.bulkSel[m.ID] {
+			ids = append(ids, m.ID)
+		}
+	}
+	return ids
+}
+
+// toggleBulk menandai/membatalkan pesan terpilih (tombol x) dalam set bulk.
+func (s *state) toggleBulk() {
+	if s.selected < 0 || s.selected >= len(s.msgs) {
+		return
+	}
+	id := s.msgs[s.selected].ID
+	if s.bulkSel == nil {
+		s.bulkSel = map[int]bool{}
+	}
+	if s.bulkSel[id] {
+		delete(s.bulkSel, id)
+	} else {
+		s.bulkSel[id] = true
+	}
+}
+
+// clearBulk mengosongkan set pilihan bulk.
+func (s *state) clearBulk() { s.bulkSel = nil }
+
+// runBulk mengeksekusi aksi bulk lewat Service (bukan loop di UI) lalu
+// memuat ulang daftar + badge sidebar. archive=true → ArchiveMany, else DeleteMany.
+func (s *state) runBulk(archive bool) {
+	ids := s.bulkIDs()
+	if len(ids) == 0 {
+		return
+	}
+	s.clearBulk()
+	verb := "dihapus"
+	op := s.svc.DeleteMany
+	if archive {
+		verb = "diarsipkan"
+		op = s.svc.ArchiveMany
+	}
+	win := s.win
+	run := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		err := op(ctx, ids)
+		if win == nil {
+			s.bulkDone(len(ids), verb, err) // mode uji headless: langsung
+			return
+		}
+		win.Update(func() { s.bulkDone(len(ids), verb, err) })
+	}
+	if win == nil {
+		run()
+		return
+	}
+	go run()
+}
+
+// bulkDone melaporkan hasil aksi bulk sebagai toast ringkasan lalu
+// memuat ulang folder (daftar pesan + badge unread sidebar).
+func (s *state) bulkDone(n int, verb string, err error) {
+	switch {
+	case err == nil:
+		s.notify(fmt.Sprintf("%d %s", n, verb), "success")
+	default:
+		var me *app.MultiError
+		if !errors.As(err, &me) {
+			s.handleErr("", err)
+			break
+		}
+		syncOnly := true
+		for _, e := range me.Errs {
+			if !app.IsSyncWarning(e) {
+				syncOnly = false
+				break
+			}
+		}
+		switch {
+		case syncOnly:
+			// Semua gagalnya best-effort sync server: aksi lokal berhasil.
+			s.notify(fmt.Sprintf("%d %s; sync ke server gagal", n, verb), "warning")
+		case n-len(me.Errs) > 0:
+			s.notify(fmt.Sprintf("%d %s, %d gagal", n-len(me.Errs), verb, len(me.Errs)), "error")
+		default:
+			s.notify("Gagal "+verb+": "+me.Error(), "error")
+		}
+	}
+	s.reloadFolders()
+}
+
+// bulkDeleteModal konfirmasi hapus N pesan terpilih (pola ui.Modal yang
+// sama dengan modal hapus akun). Konfirmasi memicu eksekusi Service.
+func (s *state) bulkDeleteModal(c *ui.Context) {
+	if !s.bulkDelOpen {
+		return
+	}
+	t := c.Theme()
+	n := s.bulkCount()
+	ui.Modal(c, &s.bulkDelOpen, func() {
+		ui.Column(c).Width(420).Padding(20, 24).Gap(12).Children(func() {
+			ui.Textf(c, "Hapus %d pesan?", n).Bold().FontSize(16)
+			ui.Text(c, "Pesan terpilih dipindah ke folder Trash. Yang sudah di "+
+				"Trash dihapus permanen dari perangkat ini.").TextColor(t.TextMuted).FontSize(12)
+			ui.Row(c).Gap(10).Justify(ui.End).Children(func() {
+				if ui.Button(c, "Batal").Clicked() {
+					s.bulkDelOpen = false
+				}
+				if ui.Button(c, "Hapus").Label("Hapus " + strconv.Itoa(n) + " pesan").Clicked() {
+					s.bulkDelOpen = false
+					s.runBulk(false)
+				}
+			})
+		})
 	})
 }
 
@@ -995,6 +1141,26 @@ func (s *state) shortcuts(c *ui.Context) {
 	}
 	if s.selected >= len(s.msgs) {
 		return
+	}
+	// Mode pilih bulk (tombol x). Saat set tidak kosong, aksi bulk menang:
+	// Shift+A arsip semua terpilih, Shift+D modal hapus, Escape kosongkan.
+	if c.Shortcut(0, ui.KeyX) {
+		s.toggleBulk()
+		return
+	}
+	if s.bulkCount() > 0 {
+		if c.Shortcut(0, ui.KeyEscape) {
+			s.clearBulk()
+			return
+		}
+		if c.Shortcut(ui.Shift, ui.KeyA) {
+			s.runBulk(true)
+			return
+		}
+		if c.Shortcut(ui.Shift, ui.KeyD) {
+			s.bulkDelOpen = true
+			return
+		}
 	}
 	if c.Shortcut(ui.Shift, ui.KeyR) {
 		s.openComposer("reply_all")
