@@ -1,0 +1,64 @@
+name: Deploy relay (landing + OAuth)
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - 'server/**'
+      - '.github/workflows/deploy-relay.yml'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: deploy-relay
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+
+      - name: Test & build karta-relay
+        run: |
+          cd server
+          go test ./...
+          go vet ./...
+          CGO_ENABLED=0 go build -trimpath -o karta-relay .
+
+      - name: Install SSH key
+        env:
+          SSH_KEY: ${{ secrets.RELAY_SSH_KEY }}
+          RELAY_HOST: ${{ secrets.RELAY_HOST }}
+        run: |
+          install -m 600 /dev/null /tmp/id_ed25519
+          printf '%s' "$SSH_KEY" > /tmp/id_ed25519
+          ssh-keyscan -H "$RELAY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Upload binary & restart service
+        env:
+          RELAY_HOST: ${{ secrets.RELAY_HOST }}
+          RELAY_USER: ${{ secrets.RELAY_USER }}
+        run: |
+          scp -i /tmp/id_ed25519 server/karta-relay "$RELAY_USER@$RELAY_HOST:/tmp/karta-relay.new"
+          ssh -i /tmp/id_ed25519 "$RELAY_USER@$RELAY_HOST" '
+            set -e
+            install -m 0755 /tmp/karta-relay.new /opt/karta-relay/karta-relay
+            rm /tmp/karta-relay.new
+            sudo systemctl restart karta-relay
+            systemctl is-active karta-relay
+          '
+
+      - name: Health check
+        env:
+          RELAY_HOST: ${{ secrets.RELAY_HOST }}
+        run: |
+          sleep 2
+          code=$(curl -s -o /dev/null -w '%{http_code}' "https://karta.devchya.id/")
+          test "$code" = 200
