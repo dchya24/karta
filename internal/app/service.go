@@ -449,6 +449,35 @@ func (s *Service) Delete(ctx context.Context, id int) error {
 	return nil
 }
 
+// ArchiveMany mengarsipkan banyak pesan sekaligus: loop memanggil Archive
+// per-ID secara berurutan (urutan input dipertahankan; IMAP satu koneksi
+// per akun — jangan parallel). Kegagalan per-ID dikumpulkan sebagai
+// *MultiError; nil bila semua sukses.
+func (s *Service) ArchiveMany(ctx context.Context, ids []int) error {
+	return s.forEachID(ctx, ids, s.Archive)
+}
+
+// DeleteMany menghapus banyak pesan sekaligus dengan pola yang sama seperti
+// ArchiveMany: loop berurutan memanggil Delete per-ID, error agregat.
+func (s *Service) DeleteMany(ctx context.Context, ids []int) error {
+	return s.forEachID(ctx, ids, s.Delete)
+}
+
+// forEachID menjalankan op pesan per-ID berurutan dan mengumpulkan kegagalan
+// per-ID (dibungkus konteks "pesan N") menjadi *MultiError.
+func (s *Service) forEachID(ctx context.Context, ids []int, op func(context.Context, int) error) error {
+	var errs []error
+	for _, id := range ids {
+		if err := op(ctx, id); err != nil {
+			errs = append(errs, fmt.Errorf("pesan %d: %w", id, err))
+		}
+	}
+	if len(errs) == 0 {
+		return nil
+	}
+	return &MultiError{Errs: errs}
+}
+
 func (s *Service) moveToRole(ctx context.Context, id int, role string) error {
 	verb := "Dipindah"
 	if role == "archive" {
