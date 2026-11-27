@@ -3,212 +3,1181 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="color-scheme" content="light dark">
-  <title>Karta — Native Desktop Email Client</title>
+  <meta name="color-scheme" content="light">
+  <script>
+    try {
+      if (localStorage.getItem("karta-theme") === "dark") {
+        document.querySelector('meta[name="color-scheme"]').content = "dark";
+      }
+    } catch {}
+  </script>
+  <meta name="description" content="Karta adalah email client desktop pure native berbasis Go dan GPU UI tanpa Electron. Ringan di bawah 30 MB RAM, pencarian SQLite FTS5 instan, IMAP IDLE, dan login Google satu klik.">
+  <title>Karta — Email Client Desktop Native</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
-    @layer theme, base;
+    @layer theme, base, layout, components;
 
     @layer theme {
       :root {
-        --bg-light: #f8fafc;
-        --bg-dark: #111827;
+        --bg-light: #ffffff;
+        --bg-dark: #0d1117;
         --surface-light: #ffffff;
-        --surface-dark: #1e293b;
+        --surface-dark: #141b24;
+        --surface-2-light: #f4f6f8;
+        --surface-2-dark: #1c2532;
         --border-light: #e2e8f0;
-        --border-dark: #334155;
+        --border-dark: #273244;
+        --border-strong-light: #cbd5e1;
+        --border-strong-dark: #38465c;
         --text-light: #111827;
-        --text-dark: #f8fafc;
-        --muted-light: #475569;
-        --muted-dark: #94a3b8;
-        --accent-light: #0284c7;
+        --text-dark: #f3f4f6;
+        --muted-light: #4b5563;
+        --muted-dark: #9ca3af;
+        --accent-light: #0277b5;
         --accent-dark: #00add8;
+        --accent-hover-light: #036296;
+        --accent-hover-dark: #28c5eb;
         --accent-fg-light: #ffffff;
-        --accent-fg-dark: #0b1220;
+        --accent-fg-dark: #07131d;
+        --accent-soft-light: rgba(2, 132, 199, 0.065);
+        --accent-soft-dark: rgba(0, 173, 216, 0.12);
+        --stage-shadow-light:
+          0 1px 2px rgba(17, 24, 39, 0.05),
+          0 18px 42px -18px rgba(17, 24, 39, 0.12),
+          0 32px 68px -30px rgba(2, 119, 181, 0.1);
+        --stage-shadow-dark:
+          0 1px 0 rgba(255, 255, 255, 0.05) inset,
+          0 26px 60px -18px rgba(0, 0, 0, 0.72),
+          0 0 0 1px rgba(0, 173, 216, 0.08);
 
         --bg: var(--bg-light);
         --surface: var(--surface-light);
+        --surface-2: var(--surface-2-light);
         --border: var(--border-light);
+        --border-strong: var(--border-strong-light);
         --text: var(--text-light);
         --muted: var(--muted-light);
         --accent: var(--accent-light);
+        --accent-hover: var(--accent-hover-light);
         --accent-fg: var(--accent-fg-light);
+        --accent-soft: var(--accent-soft-light);
+        --stage-shadow: var(--stage-shadow-light);
 
-        @media (prefers-color-scheme: dark) {
+        --font-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+        --font-body: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+        --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+        --max-w: 66rem;
+        --radius-sm: 6px;
+        --radius-md: 10px;
+        --radius-lg: 16px;
+
+        color-scheme: light;
+        accent-color: var(--accent);
+
+        &:has(> head > meta[name="color-scheme"][content="dark"]) {
+          color-scheme: dark;
           --bg: var(--bg-dark);
           --surface: var(--surface-dark);
+          --surface-2: var(--surface-2-dark);
           --border: var(--border-dark);
+          --border-strong: var(--border-strong-dark);
           --text: var(--text-dark);
           --muted: var(--muted-dark);
           --accent: var(--accent-dark);
+          --accent-hover: var(--accent-hover-dark);
           --accent-fg: var(--accent-fg-dark);
+          --accent-soft: var(--accent-soft-dark);
+          --stage-shadow: var(--stage-shadow-dark);
         }
 
         @supports (color: light-dark(white, black)) {
           --bg: light-dark(var(--bg-light), var(--bg-dark));
           --surface: light-dark(var(--surface-light), var(--surface-dark));
+          --surface-2: light-dark(var(--surface-2-light), var(--surface-2-dark));
           --border: light-dark(var(--border-light), var(--border-dark));
+          --border-strong: light-dark(var(--border-strong-light), var(--border-strong-dark));
           --text: light-dark(var(--text-light), var(--text-dark));
           --muted: light-dark(var(--muted-light), var(--muted-dark));
           --accent: light-dark(var(--accent-light), var(--accent-dark));
+          --accent-hover: light-dark(var(--accent-hover-light), var(--accent-hover-dark));
           --accent-fg: light-dark(var(--accent-fg-light), var(--accent-fg-dark));
+          --accent-soft: light-dark(var(--accent-soft-light), var(--accent-soft-dark));
         }
-
-        color-scheme: light dark;
       }
     }
 
     @layer base {
-      html, body, main, header, footer, figure, figcaption, h1, p, a, code, img {
+      html, body, header, nav, main, section, footer, figure, figcaption,
+      h1, h2, h3, p, ul, ol, li, pre, code, kbd, fieldset, legend, div, a, button, input {
         box-sizing: border-box;
+      }
+
+      body, h1, h2, h3, p, ul, ol, figure, pre, fieldset {
         margin: 0;
         padding: 0;
       }
 
+      html {
+        scroll-behavior: smooth;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        html {
+          scroll-behavior: auto;
+        }
+      }
+
       body {
-        font-family: system-ui, -apple-system, sans-serif;
-        background: var(--bg);
+        font-family: var(--font-body);
+        background-color: var(--bg);
+        background-image: radial-gradient(68% 420px at 50% 0%, var(--accent-soft), transparent 72%);
+        background-repeat: no-repeat;
         color: var(--text);
         line-height: 1.6;
         min-block-size: 100dvh;
-        display: grid;
-        place-items: center;
-        padding: 1.5rem;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
       }
 
-      main {
-        inline-size: min(760px, 100%);
-        background: var(--surface);
-        border: 1px solid var(--border);
-        border-radius: 14px;
-        padding: 2rem;
-        display: flex;
-        flex-direction: column;
-        gap: 1.25rem;
+      ::selection {
+        background: var(--accent);
+        color: var(--accent-fg);
       }
 
-      header {
-        display: flex;
-        align-items: center;
-        gap: 0.85rem;
-      }
-
-      h1 {
-        font-size: 1.5rem;
-        letter-spacing: -0.02em;
+      h1, h2, h3 {
+        font-family: var(--font-display);
+        color: var(--text);
+        text-wrap: balance;
       }
 
       p {
         color: var(--muted);
-        font-size: 0.95rem;
+        text-wrap: pretty;
+        overflow-wrap: break-word;
       }
 
-      .actions {
+      code, kbd, pre {
+        font-family: var(--font-mono);
+      }
+
+      a {
+        color: inherit;
+      }
+
+      :where(a:any-link, button, input, [tabindex="-1"]):focus-visible {
+        outline: 2.5px solid var(--accent);
+        outline-offset: 3px;
+      }
+
+      .visually-hidden:where(:not(:focus-within, :active)) {
+        position: absolute !important;
+        clip-path: inset(50%) !important;
+        overflow: hidden !important;
+        inline-size: 1px !important;
+        block-size: 1px !important;
+        margin: -1px !important;
+        padding: 0 !important;
+        border: 0 !important;
+        white-space: nowrap !important;
+      }
+    }
+
+    @layer layout {
+      .container {
+        inline-size: min(var(--max-w), calc(100% - 2.5rem));
+        margin-inline: auto;
+      }
+
+      .site-header {
+        border-block-end: 1px solid var(--border);
+        padding-block: 1rem;
+      }
+
+      .header-inner {
         display: flex;
-        gap: 0.75rem;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
         flex-wrap: wrap;
       }
 
-      .btn {
-        padding-block: 0.55rem;
-        padding-inline: 1rem;
-        border-radius: 8px;
+      .hero {
+        padding-block: clamp(2.75rem, 5vw, 4.5rem) clamp(2rem, 3.5vw, 3rem);
+      }
+
+      .stage-section {
+        padding-block-end: clamp(3.25rem, 6vw, 5.5rem);
+      }
+
+      .band {
+        padding-block: clamp(2.75rem, 5vw, 4.25rem);
+        border-block-start: 1px solid var(--border);
+      }
+
+      .site-footer {
+        border-block-start: 1px solid var(--border);
+        padding-block: 1.75rem 2.5rem;
+      }
+
+      @media (max-width: 600px) {
+        .container {
+          inline-size: min(var(--max-w), calc(100% - 1.5rem));
+        }
+      }
+    }
+
+    @layer components {
+      .skip-link {
+        position: fixed;
+        inset-block-start: 0.75rem;
+        inset-inline-start: 0.75rem;
+        z-index: 100;
+        background: var(--accent);
+        color: var(--accent-fg);
+        padding-block: 0.5rem;
+        padding-inline: 0.9rem;
+        border-radius: var(--radius-sm);
         font-weight: 600;
-        font-size: 0.9rem;
+        font-size: 0.875rem;
         text-decoration: none;
+      }
+
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.65rem;
+        text-decoration: none;
+        font-family: var(--font-display);
+        font-weight: 700;
+        font-size: 1.15rem;
+        letter-spacing: -0.02em;
+      }
+
+      .header-right {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+      }
+
+      .top-nav ul {
+        list-style: none;
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+        flex-wrap: wrap;
+      }
+
+      .top-nav a {
+        display: inline-flex;
+        align-items: center;
+        min-block-size: 2.25rem;
+        padding-inline: 0.75rem;
+        border-radius: var(--radius-sm);
+        font-size: 0.9rem;
+        font-weight: 500;
+        color: var(--muted);
+        text-decoration: none;
+        transition: color 140ms ease, background-color 140ms ease;
+
+        &:hover {
+          color: var(--text);
+          background: var(--surface-2);
+        }
+      }
+
+      .theme-toggle {
+        appearance: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        min-block-size: 2.25rem;
+        padding-block: 0.35rem;
+        padding-inline: 0.7rem;
+        border-radius: var(--radius-sm);
         border: 1px solid var(--border);
+        background: var(--surface-2);
         color: var(--text);
+        font-family: var(--font-body);
+        font-size: 0.825rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: border-color 140ms ease, background-color 140ms ease, color 140ms ease;
+
+        &:hover:not(:disabled) {
+          border-color: var(--accent);
+          color: var(--accent);
+        }
+      }
+
+      .theme-opt {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+      }
+
+      .theme-opt-light {
+        display: none;
+      }
+
+      :root:has(> head > meta[name="color-scheme"][content="dark"]) {
+        .theme-opt-dark {
+          display: none;
+        }
+
+        .theme-opt-light {
+          display: inline-flex;
+        }
+      }
+
+      /* Hero */
+      .hero-grid {
+        display: grid;
+        gap: 1.5rem;
+        max-inline-size: 46rem;
+      }
+
+      .hero h1 {
+        font-size: clamp(2.15rem, 1.45rem + 2.6vw, 3.65rem);
+        font-weight: 800;
+        line-height: 1.06;
+        letter-spacing: -0.035em;
+      }
+
+      .hero h1 .accent-phrase {
+        color: var(--accent);
+      }
+
+      .hero-lead {
+        font-size: clamp(1rem, 0.95rem + 0.25vw, 1.125rem);
+        line-height: 1.65;
+        max-inline-size: 58ch;
+      }
+
+      .hero-lead code {
+        font-size: 0.88em;
+        color: var(--text);
+        background: var(--surface-2);
+        padding-block: 0.08em;
+        padding-inline: 0.25em;
+        border-radius: 4px;
+      }
+
+      .hero-actions {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem 1rem;
+        flex-wrap: wrap;
+        padding-block-start: 0.25rem;
+      }
+
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5rem;
+        min-block-size: 2.75rem;
+        padding-block: 0.6rem;
+        padding-inline: 1.2rem;
+        border-radius: var(--radius-md);
+        font-family: var(--font-body);
+        font-weight: 600;
+        font-size: 0.9375rem;
+        line-height: 1.2;
+        text-decoration: none;
+        border: 1px solid var(--border-strong);
+        background: var(--surface);
+        color: var(--text);
+        cursor: pointer;
+        transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease, transform 150ms ease;
+
+        &:hover:not(:disabled) {
+          border-color: var(--accent);
+          background: var(--surface-2);
+        }
+
+        @media (prefers-reduced-motion: no-preference) {
+          &:active:not(:disabled) {
+            transform: translateY(1px);
+          }
+        }
       }
 
       .btn-primary {
         background: var(--accent);
         color: var(--accent-fg);
         border-color: transparent;
+
+        &:hover:not(:disabled) {
+          background: var(--accent-hover);
+          border-color: transparent;
+          color: var(--accent-fg);
+        }
       }
 
-      .screenshots {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-        gap: 0.85rem;
+      .hero-meta {
+        font-family: var(--font-mono);
+        font-size: 0.8rem;
+        color: var(--muted);
+        margin-inline-start: 0.25rem;
       }
 
-      figure {
+      /* Signature Element: Interactive Native Desktop Theme Curtain */
+      .stage-frame {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+        corner-shape: squircle;
+        box-shadow: var(--stage-shadow);
+        overflow: hidden;
+      }
+
+      .stage-bar {
         display: flex;
-        flex-direction: column;
-        gap: 0.4rem;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+        padding-block: 0.65rem;
+        padding-inline: 1rem;
+        background: var(--surface-2);
+        border-block-end: 1px solid var(--border);
       }
 
-      figure img {
-        inline-size: 100%;
-        block-size: auto;
-        display: block;
-        border-radius: 8px;
+      .stage-title {
+        font-family: var(--font-mono);
+        font-size: 0.78rem;
+        color: var(--muted);
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+
+      .stage-dot {
+        inline-size: 0.48rem;
+        block-size: 0.48rem;
+        border-radius: 50%;
+        background: var(--accent);
+        flex-shrink: 0;
+      }
+
+      .mode-group {
+        display: inline-flex;
+        align-items: center;
+        padding: 3px;
+        gap: 2px;
+        border-radius: var(--radius-sm);
+        background: var(--surface);
         border: 1px solid var(--border);
       }
 
-      figcaption {
-        font-size: 0.8rem;
+      .mode-btn {
+        appearance: none;
+        border: 0;
+        background: transparent;
         color: var(--muted);
-        text-align: center;
+        font-family: var(--font-body);
+        font-size: 0.8rem;
+        font-weight: 600;
+        min-block-size: 1.85rem;
+        padding-block: 0.25rem;
+        padding-inline: 0.7rem;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: background-color 140ms ease, color 140ms ease;
+
+        &:hover:not([aria-pressed="true"]) {
+          color: var(--text);
+        }
+
+        &[aria-pressed="true"] {
+          background: var(--accent);
+          color: var(--accent-fg);
+        }
       }
 
-      code {
-        font-family: ui-monospace, monospace;
+      .stage-viewport {
+        --split: 56.4%;
+        position: relative;
+        aspect-ratio: 1100 / 720;
+        inline-size: 100%;
+        background: #111827;
+        user-select: none;
+        overflow: hidden;
+      }
+
+      .stage-viewport img {
+        position: absolute;
+        inset: 0;
+        inline-size: 100%;
+        block-size: 100%;
+        object-fit: cover;
+        display: block;
+        pointer-events: none;
+      }
+
+      .stage-dark {
+        clip-path: inset(0 0 0 var(--split));
+      }
+
+      .stage-divider {
+        position: absolute;
+        inset-block: 0;
+        inset-inline-start: var(--split);
+        inline-size: 2px;
+        margin-inline-start: -1px;
+        background: var(--accent);
+        pointer-events: none;
+        box-shadow: 0 0 12px rgba(0, 173, 216, 0.45);
+      }
+
+      .stage-handle {
+        position: absolute;
+        inset-block-start: 50%;
+        inset-inline-start: 50%;
+        transform: translate(-50%, -50%);
+        inline-size: 2.25rem;
+        block-size: 2.25rem;
+        border-radius: 999px;
+        background: var(--surface);
+        border: 2px solid var(--accent);
+        color: var(--text);
+        display: grid;
+        place-items: center;
+        box-shadow: 0 4px 16px rgba(15, 23, 42, 0.28);
+      }
+
+      .stage-viewport[data-snapping="true"] .stage-dark {
+        @media (prefers-reduced-motion: no-preference) {
+          transition: clip-path 240ms cubic-bezier(0.22, 1, 0.36, 1);
+        }
+      }
+
+      .stage-viewport[data-snapping="true"] .stage-divider {
+        @media (prefers-reduced-motion: no-preference) {
+          transition: inset-inline-start 240ms cubic-bezier(0.22, 1, 0.36, 1);
+        }
+      }
+
+      .stage-slider {
+        position: absolute;
+        inset: 0;
+        inline-size: 100%;
+        block-size: 100%;
+        margin: 0;
+        opacity: 0;
+        cursor: ew-resize;
+        touch-action: pan-y;
+      }
+
+      .stage-viewport:has(.stage-slider:focus-visible) .stage-handle {
+        outline: 3px solid var(--accent);
+        outline-offset: 3px;
+      }
+
+      .stage-caption {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        flex-wrap: wrap;
+        padding-block: 0.65rem;
+        padding-inline: 1rem;
+        border-block-start: 1px solid var(--border);
+        font-size: 0.8125rem;
+        color: var(--muted);
+      }
+
+      .stage-caption-hint {
+        font-family: var(--font-mono);
+        font-size: 0.75rem;
+      }
+
+      /* Capabilities Grid */
+      .band-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 1rem;
+        flex-wrap: wrap;
+        margin-block-end: 2rem;
+      }
+
+      .band-head h2 {
+        font-size: clamp(1.45rem, 1.2rem + 1vw, 2rem);
+        font-weight: 700;
+        letter-spacing: -0.025em;
+        line-height: 1.15;
+      }
+
+      .band-note {
+        font-family: var(--font-mono);
+        font-size: 0.8rem;
+        color: var(--muted);
+      }
+
+      .spec-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 2rem 2.75rem;
+      }
+
+      .spec-item {
+        border-block-start: 1px solid var(--border-strong);
+        padding-block-start: 1.15rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+
+      .spec-tag {
+        font-family: var(--font-mono);
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: var(--accent);
+        letter-spacing: 0.02em;
+      }
+
+      .spec-item h3 {
+        font-size: 1.125rem;
+        font-weight: 700;
+        letter-spacing: -0.015em;
+        line-height: 1.3;
+      }
+
+      .spec-item p {
+        font-size: 0.9375rem;
+        max-inline-size: 46ch;
+      }
+
+      /* Keyboard Strip */
+      .keys-wrap {
+        margin-block-start: 2.75rem;
+        padding-block: 1.25rem;
+        padding-inline: 1.35rem;
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        display: flex;
+        flex-direction: column;
+        gap: 0.9rem;
+      }
+
+      .keys-label {
+        font-family: var(--font-mono);
+        font-size: 0.78rem;
+        font-weight: 600;
+        color: var(--muted);
+      }
+
+      .keys-list {
+        list-style: none;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.65rem 1.35rem;
+      }
+
+      .keys-list li {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        font-size: 0.875rem;
+        color: var(--muted);
+      }
+
+      kbd {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-inline-size: 1.65rem;
+        min-block-size: 1.55rem;
+        padding-inline: 0.4rem;
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: var(--text);
+        background: var(--surface);
+        border: 1px solid var(--border-strong);
+        border-block-end-width: 2px;
+        border-radius: 5px;
+      }
+
+      /* Install Band */
+      .install-shell {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+        overflow: hidden;
+      }
+
+      .install-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+        padding-block: 0.65rem;
+        padding-inline: 1rem;
+        background: var(--surface-2);
+        border-block-end: 1px solid var(--border);
+      }
+
+      .os-switch {
+        border: 0;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+      }
+
+      .os-switch input {
+        position: absolute;
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      .os-switch label {
+        display: inline-flex;
+        align-items: center;
+        min-block-size: 2rem;
+        padding-block: 0.25rem;
+        padding-inline: 0.75rem;
+        border-radius: var(--radius-sm);
+        font-size: 0.8125rem;
+        font-weight: 600;
+        color: var(--muted);
+        cursor: pointer;
+        transition: background-color 140ms ease, color 140ms ease;
+
+        &:hover {
+          color: var(--text);
+        }
+      }
+
+      .os-switch input:checked + label {
+        background: var(--surface);
+        color: var(--text);
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+      }
+
+      .os-switch input:focus-visible + label {
+        outline: 2.5px solid var(--accent);
+        outline-offset: 2px;
+      }
+
+      .copy-btn {
+        appearance: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        min-block-size: 2rem;
+        padding-block: 0.25rem;
+        padding-inline: 0.75rem;
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--border-strong);
+        background: var(--surface);
+        color: var(--text);
+        font-family: var(--font-body);
+        font-size: 0.8rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: border-color 140ms ease, color 140ms ease;
+
+        &:hover:not(:disabled) {
+          border-color: var(--accent);
+          color: var(--accent);
+        }
+      }
+
+      .install-cmd {
+        padding-block: 1.15rem;
+        padding-inline: 1.25rem;
+        overflow-x: auto;
         font-size: 0.85rem;
+        line-height: 1.55;
         color: var(--text);
       }
 
-      footer {
-        font-size: 0.8rem;
-        color: var(--muted);
-        border-block-start: 1px solid var(--border);
-        padding-block-start: 1rem;
+      .install-cmd[data-panel="win"] {
+        display: none;
       }
 
-      footer a {
+      .install-shell:has(#os-win:checked) .install-cmd[data-panel="unix"] {
+        display: none;
+      }
+
+      .install-shell:has(#os-win:checked) .install-cmd[data-panel="win"] {
+        display: block;
+      }
+
+      .cmd-prompt {
         color: var(--accent);
+        user-select: none;
+        margin-inline-end: 0.5rem;
+      }
+
+      .install-foot {
+        margin-block-start: 1rem;
+        font-size: 0.875rem;
+        color: var(--muted);
+      }
+
+      .install-foot a {
+        color: var(--accent);
+        font-weight: 500;
+        text-underline-offset: 3px;
+      }
+
+      /* Footer */
+      .footer-inner {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem 1.5rem;
+        flex-wrap: wrap;
+        font-size: 0.84rem;
+        color: var(--muted);
+      }
+
+      .footer-links {
+        display: flex;
+        align-items: center;
+        gap: 1.15rem;
+        flex-wrap: wrap;
+      }
+
+      .footer-links a {
+        color: var(--muted);
         text-decoration: none;
+        transition: color 140ms ease;
+
+        &:hover {
+          color: var(--accent);
+        }
+      }
+
+      @media (max-width: 720px) {
+        .spec-grid {
+          grid-template-columns: 1fr;
+          gap: 1.6rem;
+        }
+      }
+
+      @media (max-width: 600px) {
+        .stage-handle {
+          inline-size: 1.85rem;
+          block-size: 1.85rem;
+        }
+      }
+
+      @media (pointer: coarse) {
+        .top-nav a,
+        .theme-toggle,
+        .mode-btn,
+        .os-switch label,
+        .copy-btn {
+          min-block-size: 2.75rem;
+        }
+      }
+
+      @media (prefers-reduced-motion: no-preference) {
+        .hero,
+        .stage-frame {
+          animation: rise 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+        }
+
+        .stage-frame {
+          animation-delay: 80ms;
+        }
+      }
+
+      @keyframes rise {
+        from {
+          opacity: 0;
+          transform: translateY(10px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
       }
     }
   </style>
 </head>
 <body>
-  <main>
-    <header>
-      <svg width="40" height="40" viewBox="0 0 512 512" fill="none" role="img" aria-label="Logo Karta">
-        <rect x="24" y="24" width="464" height="464" rx="108" fill="#111827" stroke="#334155" stroke-width="12"/>
-        <path d="M156 144V368" stroke="#F8FAFC" stroke-width="46" stroke-linecap="round"/>
-        <path d="M356 144L224 256L356 368" stroke="#00ADD8" stroke-width="46" stroke-linecap="round" stroke-linejoin="round"/>
-        <circle cx="356" cy="256" r="22" fill="#F8FAFC"/>
-      </svg>
-      <div>
-        <h1>Karta</h1>
-        <p>Pure Native Desktop Email Client</p>
+  <a class="skip-link visually-hidden" href="#konten">Langsung ke konten utama</a>
+
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="/">
+        <svg width="32" height="32" viewBox="0 0 512 512" fill="none" role="img" aria-label="Logo Karta">
+          <rect x="24" y="24" width="464" height="464" rx="108" fill="#111827" stroke="#334155" stroke-width="12"/>
+          <path d="M156 144V368" stroke="#F8FAFC" stroke-width="46" stroke-linecap="round"/>
+          <path d="M356 144L224 256L356 368" stroke="#00ADD8" stroke-width="46" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="356" cy="256" r="22" fill="#F8FAFC"/>
+        </svg>
+        <span>Karta</span>
+      </a>
+      <div class="header-right">
+        <nav class="top-nav" aria-label="Utama">
+          <ul>
+            <li><a href="#fitur">Kemampuan</a></li>
+            <li><a href="#instal">Instal</a></li>
+            <li><a href="https://github.com/dchya24/karta">GitHub</a></li>
+          </ul>
+        </nav>
+        <button class="theme-toggle" id="theme-toggle" type="button">
+          <span class="theme-opt theme-opt-dark">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>
+            </svg>
+            <span>Gelap<span class="visually-hidden"> — aktifkan tema gelap</span></span>
+          </span>
+          <span class="theme-opt theme-opt-light">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="4"/>
+              <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>
+            </svg>
+            <span>Terang<span class="visually-hidden"> — aktifkan tema terang</span></span>
+          </span>
+        </button>
       </div>
-    </header>
-
-    <p>
-      Email client desktop ringan berbasis Go dan GPU UI (<code>mygo/ui</code>) tanpa Electron atau WebView. Dilengkapi pencarian SQLite FTS5 instan, IMAP IDLE, login Google satu klik, dan penyimpanan kredensial di OS Keyring.
-    </p>
-
-    <div class="actions">
-      <a class="btn btn-primary" href="https://github.com/dchya24/karta/releases/latest">Unduh Rilis</a>
-      <a class="btn" href="https://github.com/dchya24/karta">GitHub</a>
     </div>
+  </header>
 
-    <div class="screenshots">
-      <figure>
-        <img src="main-light.png" alt="Tampilan aplikasi desktop Karta tema terang" width="1100" height="720" fetchpriority="high">
-        <figcaption>Terang</figcaption>
-      </figure>
-      <figure>
-        <img src="main-dark.png" alt="Tampilan aplikasi desktop Karta tema gelap" width="1100" height="720" fetchpriority="high">
-        <figcaption>Gelap</figcaption>
-      </figure>
-    </div>
+  <main>
+    <section class="hero">
+      <div class="container">
+        <div class="hero-grid">
+          <h1 id="konten" tabindex="-1">
+            Email desktop native.<br>
+            <span class="accent-phrase">Tanpa Electron.</span>
+          </h1>
+          <p class="hero-lead">
+            Karta menggambar antarmuka 3-pane langsung lewat GPU (<code>mygo/ui</code>) dalam satu binary Go — konsumsi memori di bawah 30 MB, pencarian SQLite FTS5 instan, siap bekerja offline, dan cepat dikendalikan dari keyboard.
+          </p>
+          <div class="hero-actions">
+            <a class="btn btn-primary" href="https://github.com/dchya24/karta/releases/latest">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 3v12"/>
+                <path d="m7 10 5 5 5-5"/>
+                <path d="M5 21h14"/>
+              </svg>
+              Unduh Rilis Terbaru
+            </a>
+            <a class="btn" href="https://github.com/dchya24/karta">Lihat Kode di GitHub</a>
+            <span class="hero-meta">Linux · macOS · Windows</span>
+          </div>
+        </div>
+      </div>
+    </section>
 
-    <footer>
-      Tersedia untuk Linux, macOS, dan Windows · <a href="https://github.com/dchya24/karta/blob/main/LICENSE">Lisensi MIT</a>
-    </footer>
+    <section class="stage-section" aria-labelledby="pratinjau-judul">
+      <div class="container">
+        <h2 id="pratinjau-judul" class="visually-hidden">Pratinjau antarmuka Karta tema terang dan gelap</h2>
+        <figure class="stage-frame">
+          <div class="stage-bar">
+            <span class="stage-title">
+              <span class="stage-dot" aria-hidden="true"></span>
+              Karta · 3-Pane Native UI
+            </span>
+            <div class="mode-group" role="group" aria-label="Mode tampilan pratinjau">
+              <button class="mode-btn" type="button" data-split-preset="100" aria-pressed="false">Terang</button>
+              <button class="mode-btn" type="button" data-split-preset="56.4" aria-pressed="true">Belah</button>
+              <button class="mode-btn" type="button" data-split-preset="0" aria-pressed="false">Gelap</button>
+            </div>
+          </div>
+
+          <div class="stage-viewport" id="theme-stage" style="--split: 56.4%">
+            <img src="main-light.png" alt="Antarmuka desktop Karta dalam tema terang: sidebar folder multi-akun di kiri, daftar pesan di tengah, dan panel baca di kanan." width="1100" height="720" fetchpriority="high">
+            <img class="stage-dark" src="main-dark.png" alt="Antarmuka desktop Karta dalam tema gelap dengan tata letak 3-pane yang sama." width="1100" height="720" fetchpriority="high">
+            <div class="stage-divider" aria-hidden="true">
+              <span class="stage-handle">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="m8 7-5 5 5 5"/>
+                  <path d="m16 7 5 5-5 5"/>
+                </svg>
+              </span>
+            </div>
+            <input
+              class="stage-slider"
+              id="theme-slider"
+              type="range"
+              min="0"
+              max="100"
+              step="0.1"
+              value="56.4"
+              aria-label="Geser batas perbandingan tema terang dan tema gelap"
+              aria-valuetext="56 persen tema terang"
+            >
+          </div>
+
+          <figcaption class="stage-caption">
+            <span>Tema terang dan gelap bawaan, digambar langsung ke GPU tanpa browser tertanam.</span>
+            <span class="stage-caption-hint">Geser atau tekan tombol panah</span>
+          </figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="band" id="fitur" aria-labelledby="fitur-judul">
+      <div class="container">
+        <div class="band-head">
+          <h2 id="fitur-judul">Dibangun untuk kecepatan harian</h2>
+          <span class="band-note">Pure Go · CGO_ENABLED=0</span>
+        </div>
+
+        <div class="spec-grid">
+          <article class="spec-item">
+            <span class="spec-tag">GPU UI · &lt; 30 MB RAM</span>
+            <h3>Antarmuka 3-pane native</h3>
+            <p>Sidebar folder multi-akun, daftar pesan tervirtualisasi untuk ribuan email, dan panel baca teks bersih dengan tautan aktif serta fallback buka di browser.</p>
+          </article>
+
+          <article class="spec-item">
+            <span class="spec-tag">SQLITE FTS5 · &lt; 50 MS</span>
+            <h3>Pencarian instan, siap offline</h3>
+            <p>Indeks teks penuh SQLite FTS5 menelusuri subjek, pengirim, penerima, dan isi pesan secara lokal. Arsip email tetap bisa dibaca saat jaringan terputus.</p>
+          </article>
+
+          <article class="spec-item">
+            <span class="spec-tag">IMAP IDLE · MULTI-AKUN</span>
+            <h3>Sinkronisasi masuk seketika</h3>
+            <p>Koneksi IMAP IDLE mendorong pesan baru begitu tiba, dilengkapi cadangan polling berkala dan reconnect otomatis untuk akun IMAP maupun Gmail.</p>
+          </article>
+
+          <article class="spec-item">
+            <span class="spec-tag">OAUTH 1-KLIK · OS KEYRING</span>
+            <h3>Login Google tanpa konfigurasi</h3>
+            <p>Masuk akun Gmail langsung dari aplikasi tanpa membuat kredensial OAuth sendiri. Token dan kata sandi tersimpan aman di OS Keyring, bukan di database lokal.</p>
+          </article>
+        </div>
+
+        <div class="keys-wrap" aria-label="Pintasan keyboard utama">
+          <span class="keys-label">Navigasi keyboard-first</span>
+          <ul class="keys-list" role="list">
+            <li><kbd>J</kbd><kbd>K</kbd> <span>Pindah pesan</span></li>
+            <li><kbd>C</kbd> <span>Tulis baru</span></li>
+            <li><kbd>R</kbd> <span>Balas</span></li>
+            <li><kbd>F</kbd> <span>Teruskan</span></li>
+            <li><kbd>E</kbd> <span>Arsipkan</span></li>
+            <li><kbd>U</kbd> <span>Tandai baca</span></li>
+            <li><kbd>/</kbd> <span>Cari pesan</span></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="band" id="instal" aria-labelledby="instal-judul">
+      <div class="container">
+        <div class="band-head">
+          <h2 id="instal-judul">Pasang dalam satu perintah</h2>
+          <span class="band-note">Linux · macOS · Windows</span>
+        </div>
+
+        <div class="install-shell" id="install-shell">
+          <div class="install-bar">
+            <fieldset class="os-switch">
+              <legend class="visually-hidden">Pilih sistem operasi</legend>
+              <input type="radio" name="install-os" id="os-unix" value="unix" checked>
+              <label for="os-unix">Linux / macOS</label>
+              <input type="radio" name="install-os" id="os-win" value="win">
+              <label for="os-win">Windows (PowerShell)</label>
+            </fieldset>
+            <button class="copy-btn" id="copy-install" type="button">Salin perintah</button>
+          </div>
+
+          <pre class="install-cmd" data-panel="unix"><code><span class="cmd-prompt" aria-hidden="true">$</span><span id="cmd-unix">curl -fsSL https://raw.githubusercontent.com/dchya24/karta/master/install.sh | bash</span></code></pre>
+          <pre class="install-cmd" data-panel="win"><code><span class="cmd-prompt" aria-hidden="true">&gt;</span><span id="cmd-win">irm https://raw.githubusercontent.com/dchya24/karta/master/install.ps1 -OutFile install.ps1; .\install.ps1</span></code></pre>
+        </div>
+
+        <p class="install-foot">
+          Lebih suka memasang manual? Unduh paket <code>.deb</code>, <code>.rpm</code>, <code>.dmg</code>, atau installer <code>.exe</code> langsung di <a href="https://github.com/dchya24/karta/releases/latest">halaman Releases</a>.
+        </p>
+        <span class="visually-hidden" id="copy-status" aria-live="polite"></span>
+      </div>
+    </section>
   </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <span>Karta — Email Client Desktop Native · Linux, macOS, Windows</span>
+      <div class="footer-links">
+        <a href="https://github.com/dchya24/karta/releases/latest">Rilis</a>
+        <a href="https://github.com/dchya24/karta">GitHub</a>
+        <a href="https://github.com/dchya24/karta/blob/main/LICENSE">Lisensi MIT</a>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    (() => {
+      const themeMeta = document.querySelector('meta[name="color-scheme"]');
+      const themeToggle = document.getElementById("theme-toggle");
+
+      const applyTheme = (mode) => {
+        themeMeta.content = mode === "dark" ? "dark" : "light";
+      };
+
+      themeToggle.addEventListener("click", () => {
+        const next = themeMeta.content === "dark" ? "light" : "dark";
+        applyTheme(next);
+        try {
+          if (next === "dark") {
+            localStorage.setItem("karta-theme", "dark");
+          } else {
+            localStorage.removeItem("karta-theme");
+          }
+        } catch {}
+      });
+
+      window.addEventListener("storage", (event) => {
+        if (event.key === "karta-theme") {
+          applyTheme(event.newValue);
+        }
+      });
+
+      const stage = document.getElementById("theme-stage");
+      const slider = document.getElementById("theme-slider");
+      const presets = document.querySelectorAll("[data-split-preset]");
+
+      const setSplit = (val, snap) => {
+        const clamped = Math.max(0, Math.min(100, Number(val)));
+        stage.dataset.snapping = snap ? "true" : "false";
+        stage.style.setProperty("--split", `${clamped}%`);
+        slider.value = String(clamped);
+        slider.setAttribute("aria-valuetext", `${Math.round(clamped)} persen tema terang`);
+        presets.forEach((btn) => {
+          btn.setAttribute("aria-pressed", String(Math.abs(Number(btn.dataset.splitPreset) - clamped) < 0.2));
+        });
+      };
+
+      slider.addEventListener("input", () => setSplit(slider.value, false));
+      presets.forEach((btn) => {
+        btn.addEventListener("click", () => setSplit(btn.dataset.splitPreset, true));
+      });
+
+      const copyBtn = document.getElementById("copy-install");
+      const copyStatus = document.getElementById("copy-status");
+      const osWin = document.getElementById("os-win");
+      let resetTimer;
+
+      copyBtn.addEventListener("click", async () => {
+        const cmd = document.getElementById(osWin.checked ? "cmd-win" : "cmd-unix").textContent;
+        try {
+          await navigator.clipboard.writeText(cmd);
+          copyBtn.textContent = "Tersalin";
+          copyStatus.textContent = "Perintah instalasi disalin ke papan klip.";
+          clearTimeout(resetTimer);
+          resetTimer = setTimeout(() => {
+            copyBtn.textContent = "Salin perintah";
+          }, 1800);
+        } catch {
+          copyStatus.textContent = "Gagal menyalin otomatis. Pilih teks perintah secara manual.";
+        }
+      });
+    })();
+  </script>
 </body>
 </html>
