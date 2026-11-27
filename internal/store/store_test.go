@@ -1,6 +1,9 @@
 package store
 
-import "testing"
+import (
+	"bytes"
+	"testing"
+)
 
 func openTestDB(t *testing.T) *DB {
 	t.Helper()
@@ -181,5 +184,42 @@ func TestCcMoveAndDeleteMessage(t *testing.T) {
 	}
 	if hits, _ := db.ListMessages(archive, "agenda"); len(hits) != 0 {
 		t.Fatalf("FTS harus terhapus: %+v", hits)
+	}
+}
+
+func TestListAttachmentBlobs(t *testing.T) {
+	db := openTestDB(t)
+	accID, _ := db.AddAccount("a@contoh.id", "imap", 993, true, "smtp", 465, true, "")
+	folder, _ := db.EnsureFolder(accID, "INBOX", "inbox")
+	id, err := db.UpsertMessage(&MessageHeader{
+		FolderID: int(folder), UID: 1, Subject: "lampiran", SenderAddr: "b@x.id",
+	}, &MessageBody{PlainText: "isi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertAttachment(id, "biner.bin", "application/octet-stream", []byte{0, 1, 2, 255}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertAttachment(id, "kosong.txt", "text/plain", nil); err != nil {
+		t.Fatal(err)
+	}
+	atts, err := db.ListAttachmentBlobs(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(atts) != 2 {
+		t.Fatalf("jumlah lampiran = %d, mau 2", len(atts))
+	}
+	if atts[0].Filename != "biner.bin" || atts[0].ContentType != "application/octet-stream" {
+		t.Fatalf("lampiran 1: %+v", atts[0])
+	}
+	if !bytes.Equal(atts[0].Data, []byte{0, 1, 2, 255}) {
+		t.Fatalf("isi blob: %v", atts[0].Data)
+	}
+	if atts[1].Filename != "kosong.txt" || atts[1].Data != nil {
+		t.Fatalf("lampiran tanpa blob: %+v", atts[1])
+	}
+	if atts, err := db.ListAttachmentBlobs(id + 999); err != nil || len(atts) != 0 {
+		t.Fatalf("pesan tanpa lampiran: %+v err=%v", atts, err)
 	}
 }
